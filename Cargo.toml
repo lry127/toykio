@@ -4,3 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+tokio = {version = "1.52.3", features = ["full"]}
+anyhow = "1.0.103"
+tokio-rustls = "0.26.4"
+rustls-post-quantum = "0.2.4"
+log = "0.4.33"
+
