@@ -1,15 +1,17 @@
 use crate::config::SecurityConfig;
 use crate::protocol::{
-    compute_auth_hash_from_raw, ConnectionEstablishMessageC2S, ConnectionEstablishResponseS2C, HashedAuthSecret,
-    WireMessage,
+    compute_auth_hash_from_raw, ConnectionEstablishErrorType, ConnectionEstablishMessageC2S,
+    ConnectionEstablishResponseS2C, HashedAuthSecret, WireMessage,
 };
-use anyhow::{anyhow, bail, Context};
+use anyhow::{bail, Context};
 use bytes::BytesMut;
 use std::fmt::{Debug, Formatter};
 use std::net::SocketAddrV4;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{copy_bidirectional, AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
+use tokio::time::timeout;
 use tokio_rustls::rustls::{version, ServerConfig};
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, instrument, warn};
@@ -18,6 +20,14 @@ struct ProxyHandler {
     tcp_stream: TcpStream,
     tls_acceptor: TlsAcceptor,
     auth_secret: Arc<HashedAuthSecret>,
+}
+
+impl Debug for ProxyHandler {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProxyHandler")
+            .field("peer_addr", &self.tcp_stream.peer_addr())
+            .finish()
+    }
 }
 
 impl ProxyHandler {
@@ -32,63 +42,89 @@ impl ProxyHandler {
             auth_secret,
         }
     }
-}
 
-impl Debug for ProxyHandler {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ProxyHandler")
-            .field("peer_addr", &self.tcp_stream.peer_addr())
-            .finish()
-    }
-}
-
-impl ProxyHandler {
     #[instrument]
     async fn handle_client(self) -> anyhow::Result<()> {
-        let mut tls_stream = self.tls_acceptor.accept(self.tcp_stream).await?;
+        let mut client_stream = timeout(
+            Duration::from_secs(10),
+            self.tls_acceptor.accept(self.tcp_stream),
+        )
+        .await
+        .context("tls handshake timeout")?
+        .context("tls handshake failed")?;
+
         debug!("tls handshake ok");
 
-        let mut target_stream =
-            Self::handle_connection_establishment(&self.auth_secret, &mut tls_stream).await?;
-        if let Err(err) = copy_bidirectional(&mut target_stream, &mut tls_stream).await {
+        let mut target_stream = match Self::handle_connection_establishment(
+            &self.auth_secret,
+            &mut client_stream,
+        )
+        .await
+        {
+            Ok(stream) => stream,
+            Err(err) => {
+                debug!("connection establishment failed: {err}");
+                let _ = client_stream.shutdown().await;
+                return Err(err);
+            }
+        };
+
+        if let Err(err) = copy_bidirectional(&mut target_stream, &mut client_stream).await {
             warn!("err copy bidirectional: {err}")
         } else {
             debug!("copy bidirectional done")
         }
+        let _ = target_stream.shutdown().await;
+        let _ = client_stream.shutdown().await;
 
         Ok(())
     }
 
-    #[instrument(skip(stream))]
+    #[instrument(skip(client_stream))]
     async fn handle_connection_establishment<T: AsyncRead + AsyncWrite + Unpin>(
-        auth_secret: &Arc<HashedAuthSecret>,
-        stream: &mut T,
+        auth_secret: &HashedAuthSecret,
+        client_stream: &mut T,
     ) -> anyhow::Result<TcpStream> {
-        match ConnectionEstablishMessageC2S::read_from_stream(stream).await {
-            Ok(msg) => {
-                if msg.hashed_auth_secret != **auth_secret {
-                    warn!("invalid auth secret, connection aborted");
-                    debug!(
-                        "correct: {:?}, provided: {:?}",
-                        *auth_secret, msg.hashed_auth_secret
-                    );
-                    let _ = Self::write_message(
-                        stream,
-                        &ConnectionEstablishResponseS2C { error_type: 1u16 },
-                    )
-                    .await;
-                    let _ = stream.shutdown().await;
-                    bail!("incorrect auth secret");
-                }
-                let target_socket_addr = SocketAddrV4::new(msg.ip.into(), msg.port);
-                let target = TcpStream::connect(target_socket_addr).await?;
-                debug!("remote connected: {target:?}");
-                Ok(target)
-            }
-            Err(err) => {
-                let _ = stream.shutdown().await;
-                Err(anyhow!("can't read establishment msg: {err}"))
-            }
+        let msg = timeout(
+            Duration::from_secs(10),
+            ConnectionEstablishMessageC2S::read_from_stream(client_stream),
+        )
+        .await
+        .context("ConnectionEstablishMessageC2S timeout")?
+        .context("can't read establishment msg")?;
+
+        if msg.hashed_auth_secret != *auth_secret {
+            warn!("invalid auth secret, connection aborted");
+            debug!(
+                "correct: {:?}, provided: {:?}",
+                *auth_secret, msg.hashed_auth_secret
+            );
+            let _ = Self::write_message(
+                client_stream,
+                &ConnectionEstablishResponseS2C {
+                    error_type: ConnectionEstablishErrorType::AuthError,
+                },
+            )
+            .await;
+            bail!("incorrect auth secret");
+        }
+
+        let target_socket_addr = SocketAddrV4::new(msg.ip.into(), msg.port);
+        let target_stream = TcpStream::connect(target_socket_addr).await;
+        let error_type = match target_stream {
+            Ok(_) => ConnectionEstablishErrorType::Success,
+            Err(_) => ConnectionEstablishErrorType::TargetError,
+        };
+
+        let write_res = Self::write_message(
+            client_stream,
+            &ConnectionEstablishResponseS2C { error_type },
+        )
+        .await;
+        match (target_stream, write_res) {
+            (Ok(target), Ok(_)) => Ok(target),
+            (Err(err), _) => Err(err).context("can't establish connection to target"),
+            (_, Err(err)) => Err(err).context("can't send establish reply to client"),
         }
     }
 
@@ -98,8 +134,9 @@ impl ProxyHandler {
     ) -> anyhow::Result<()> {
         let mut buf = BytesMut::with_capacity(32);
         message.serialize_to_bytes(&mut buf);
-        tx.write_all_buf(&mut buf)
+        timeout(Duration::from_secs(5), tx.write_all_buf(&mut buf))
             .await
+            .context("write timeout")?
             .context("write message failed")
     }
 }
@@ -127,20 +164,23 @@ impl ProxyServer {
 
     pub async fn server_loop(&mut self) {
         loop {
-            match self.listener.accept().await {
-                Ok((tcp_stream, _)) => {
-                    let acceptor = self.tls_acceptor.clone();
-                    let auth_secret = self.auth_secret.clone();
-                    let proxy_handler = ProxyHandler::new(tcp_stream, acceptor, auth_secret);
-                    tokio::spawn(async move {
-                        let res = proxy_handler.handle_client().await;
-                        if res.is_err() {
-                            warn!("handle client failed: {res:?}")
-                        }
-                    });
+            let client_stream = match self.listener.accept().await {
+                Ok((stream, _)) => stream,
+                Err(err) => {
+                    warn!(%err, "can't accept stream");
+                    continue;
+                },
+            };
+
+            let acceptor = self.tls_acceptor.clone();
+            let auth_secret = self.auth_secret.clone();
+            let proxy_handler = ProxyHandler::new(client_stream, acceptor, auth_secret);
+            tokio::spawn(async move {
+                let res = proxy_handler.handle_client().await;
+                if res.is_err() {
+                    warn!("handle client failed: {res:?}")
                 }
-                Err(err) => warn!(%err, "can't accept stream"),
-            }
+            });
         }
     }
 

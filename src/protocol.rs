@@ -20,13 +20,21 @@ pub struct ConnectionEstablishMessageC2S {
     pub port: u16,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u16)]
+pub enum ConnectionEstablishErrorType {
+    Success = 0,
+    AuthError = 1,
+    TargetError = 2
+}
+
 pub struct ConnectionEstablishResponseS2C {
-    pub error_type: u16,
+    pub error_type: ConnectionEstablishErrorType
 }
 
 impl WireMessage for ConnectionEstablishResponseS2C {
     fn serialize_to_bytes(&self, buf: &mut BytesMut) {
-        buf.put_u16(self.error_type);
+        buf.put_u16(self.error_type as u16);
     }
 }
 
