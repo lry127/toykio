@@ -13,3 +13,4 @@ sha2 = "0.11.0"
 
 tracing = "0.1.11"
 tracing-subscriber = {version = "0.3.23", features = ["env-filter"]}
+rustls = "0.23.41"

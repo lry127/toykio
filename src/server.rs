@@ -3,6 +3,7 @@ use crate::protocol::{
     compute_auth_hash_from_raw, ConnectionEstablishErrorType, ConnectionEstablishMessageC2S,
     ConnectionEstablishResponseS2C, HashedAuthSecret, WireMessage,
 };
+use crate::tls::build_server_tls_config;
 use anyhow::{bail, Context};
 use bytes::BytesMut;
 use std::fmt::{Debug, Formatter};
@@ -12,7 +13,6 @@ use std::time::Duration;
 use tokio::io::{copy_bidirectional, AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tokio::time::timeout;
-use tokio_rustls::rustls::{version, ServerConfig};
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, instrument, warn};
 
@@ -153,7 +153,8 @@ impl ProxyServer {
         security_config: SecurityConfig,
     ) -> anyhow::Result<Self> {
         let listener = TcpListener::bind(bind_addr).await?;
-        let tls_config = Self::build_tls_config(&security_config)?;
+        let tls_config = build_server_tls_config(security_config.self_cert_bundle.certificate,
+        security_config.self_cert_bundle.certificate_priv_key, security_config.ca_cert)?;
         let tls_acceptor = TlsAcceptor::from(Arc::new(tls_config));
         Ok(Self {
             listener,
@@ -184,17 +185,4 @@ impl ProxyServer {
         }
     }
 
-    fn build_tls_config(security_config: &SecurityConfig) -> anyhow::Result<ServerConfig> {
-        let mut pqc_provider = rustls_post_quantum::provider();
-        pqc_provider.kx_groups = vec![rustls_post_quantum::X25519MLKEM768];
-
-        ServerConfig::builder_with_provider(Arc::new(pqc_provider))
-            .with_protocol_versions(&[&version::TLS13])?
-            .with_no_client_auth()
-            .with_single_cert(
-                vec![security_config.server_bundle.parse_certificate()?],
-                security_config.server_bundle.parse_priv_key()?,
-            )
-            .context("can't build server config")
-    }
 }
