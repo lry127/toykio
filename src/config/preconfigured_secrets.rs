@@ -18,21 +18,22 @@ const SERVER_PRIV_KEY: &str = "
 MC4CAQAwBQYDK2VwBCIEILhh88ToxI6mg/VX4ZXJQjTS3n6dnRFp5m6hnGZKQSu7
 -----END PRIVATE KEY-----";
 
-const AUTH_SECRET:&str = "hello_world+123###@@@QwQ";
+const AUTH_SECRET: &str = "hello_world+123###@@@QwQ";
 
 pub fn get_preconfigured_security_config() -> SecurityConfig {
     let server_bundle = CertificateBundle {
         certificate_data: SERVER_CERTIFICATE.into(),
         certificate_priv_key: Some(SERVER_PRIV_KEY.into()),
     };
-    
+
     let client_bundle = CertificateBundle {
         certificate_data: "".to_string(),
         certificate_priv_key: None,
     };
 
     SecurityConfig {
-        server_bundle,client_bundle,
-        auth_secret: AUTH_SECRET.into()
+        server_bundle,
+        client_bundle,
+        auth_secret: AUTH_SECRET.into(),
     }
 }

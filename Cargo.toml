@@ -8,5 +8,8 @@ tokio = {version = "1.52.3", features = ["full"]}
 anyhow = "1.0.103"
 tokio-rustls = "0.26.4"
 rustls-post-quantum = "0.2.4"
-log = "0.4.33"
+bytes = "1.12.1"
+sha2 = "0.11.0"
 
+tracing = "0.1.11"
+tracing-subscriber = {version = "0.3.23", features = ["env-filter"]}
