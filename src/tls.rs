@@ -5,28 +5,28 @@ use tokio_rustls::rustls::server::WebPkiClientVerifier;
 use tokio_rustls::rustls::{version, ClientConfig, RootCertStore, ServerConfig};
 
 pub fn build_server_tls_config(
-    certificate: CertificateDer<'static>, priv_key: PrivateKeyDer<'static>,
-    ca_cert: CertificateDer<'static>
+    certificate: CertificateDer<'static>,
+    priv_key: PrivateKeyDer<'static>,
+    ca_cert: CertificateDer<'static>,
 ) -> anyhow::Result<ServerConfig> {
     let mut pqc_provider = rustls_post_quantum::provider();
     pqc_provider.kx_groups = vec![rustls_post_quantum::X25519MLKEM768];
 
     let mut roots = RootCertStore::empty();
     roots.add(ca_cert)?;
-    let client_cert_verifier =
-        WebPkiClientVerifier::builder(Arc::new(roots)).build()?;
+    let client_cert_verifier = WebPkiClientVerifier::builder(Arc::new(roots)).build()?;
 
     ServerConfig::builder_with_provider(Arc::new(pqc_provider))
         .with_protocol_versions(&[&version::TLS13])?
         .with_client_cert_verifier(client_cert_verifier)
-        .with_single_cert(vec![certificate], priv_key, )
+        .with_single_cert(vec![certificate], priv_key)
         .context("can't build server config")
 }
 
-
 pub fn build_client_tls_config(
-    certificate: CertificateDer<'static>, priv_key: PrivateKeyDer<'static>,
-    ca_cert: CertificateDer<'static>
+    certificate: CertificateDer<'static>,
+    priv_key: PrivateKeyDer<'static>,
+    ca_cert: CertificateDer<'static>,
 ) -> anyhow::Result<ClientConfig> {
     let mut pqc_provider = rustls_post_quantum::provider();
     pqc_provider.kx_groups = vec![rustls_post_quantum::X25519MLKEM768];
@@ -62,18 +62,11 @@ mod tests {
         let client_cert = client_sec_config.self_cert_bundle.certificate;
         let client_key = client_sec_config.self_cert_bundle.certificate_priv_key;
 
+        let server_config =
+            build_server_tls_config(server_cert, server_key, server_sec_config.ca_cert)?;
 
-        let server_config = build_server_tls_config(
-            server_cert,
-            server_key,
-            server_sec_config.ca_cert
-        )?;
-
-        let client_config = build_client_tls_config(
-            client_cert,
-            client_key,
-            client_sec_config.ca_cert
-        )?;
+        let client_config =
+            build_client_tls_config(client_cert, client_key, client_sec_config.ca_cert)?;
 
         let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
         let tls_connector = TlsConnector::from(Arc::new(client_config));
@@ -82,11 +75,23 @@ mod tests {
         let addr = listener.local_addr()?;
 
         let server_task = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.expect("Failed to accept tcp connection");
-            let mut tls_stream = tls_acceptor.accept(stream).await.expect("TLS handshake failed on server");
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("Failed to accept tcp connection");
+            let mut tls_stream = tls_acceptor
+                .accept(stream)
+                .await
+                .expect("TLS handshake failed on server");
 
-            tls_stream.write_all(b"Handshake successful").await.expect("Failed to write to stream");
-            tls_stream.shutdown().await.expect("Failed to shutdown stream");
+            tls_stream
+                .write_all(b"Handshake successful")
+                .await
+                .expect("Failed to write to stream");
+            tls_stream
+                .shutdown()
+                .await
+                .expect("Failed to shutdown stream");
         });
 
         let stream = TcpStream::connect(addr).await?;

@@ -153,8 +153,11 @@ impl ProxyServer {
         security_config: SecurityConfig,
     ) -> anyhow::Result<Self> {
         let listener = TcpListener::bind(bind_addr).await?;
-        let tls_config = build_server_tls_config(security_config.self_cert_bundle.certificate,
-        security_config.self_cert_bundle.certificate_priv_key, security_config.ca_cert)?;
+        let tls_config = build_server_tls_config(
+            security_config.self_cert_bundle.certificate,
+            security_config.self_cert_bundle.certificate_priv_key,
+            security_config.ca_cert,
+        )?;
         let tls_acceptor = TlsAcceptor::from(Arc::new(tls_config));
         Ok(Self {
             listener,
@@ -170,7 +173,7 @@ impl ProxyServer {
                 Err(err) => {
                     warn!(%err, "can't accept stream");
                     continue;
-                },
+                }
             };
 
             let acceptor = self.tls_acceptor.clone();
@@ -184,5 +187,4 @@ impl ProxyServer {
             });
         }
     }
-
 }

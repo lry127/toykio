@@ -25,11 +25,11 @@ pub struct ConnectionEstablishMessageC2S {
 pub enum ConnectionEstablishErrorType {
     Success = 0,
     AuthError = 1,
-    TargetError = 2
+    TargetError = 2,
 }
 
 pub struct ConnectionEstablishResponseS2C {
-    pub error_type: ConnectionEstablishErrorType
+    pub error_type: ConnectionEstablishErrorType,
 }
 
 impl WireMessage for ConnectionEstablishResponseS2C {
