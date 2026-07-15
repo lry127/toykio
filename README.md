@@ -18,7 +18,7 @@ Toykio (TOY toKIO) is a toy (but functional) network proxy written to get my han
 
 2. client (socks5 listening on 127.0.0.1:1080, relaying proxy request to server (default 127.0.0.1:1234), server and client can reside on different machines)
     ```shell
-    cargo run --bin run_server
+    cargo run --bin run_client
     ```
 
 3. try socks5 (on the same machine where client is running)
