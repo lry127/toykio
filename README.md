@@ -9,7 +9,7 @@ Toykio (TOY toKIO) is a toy (but functional) network proxy written to get my han
 - custom protocol
 
 
-## Run!
+## run!
 
 1. server (listening on 0.0.0.0:1234, where actual outbound connections to target happen)
     ```shell
@@ -36,11 +36,11 @@ Toykio (TOY toKIO) is a toy (but functional) network proxy written to get my han
 
 ### Medium
 
-- [ ] server: use constant time compare for 'auth secret' (by relying on external library)
+- [ ] server: use constant time comparison for 'auth secret' (by relying on external library)
 - [ ] socks5: support domain type (ATYP = 3) CONNECT command, see [RFC 1928](https://youtube.com/watch?v=dQw4w9WgXcQ). You need to modify the protocol.
 
 
 ### Challenging
 
-- [ ] support multiplexing of proxy connections using the same underlying tls connection to server (m:n model, current is 1:1)
+- [ ] support multiplexing of proxy connections using the same underlying tls connection to server (m:n model, currently 1:1)
 
