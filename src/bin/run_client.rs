@@ -11,7 +11,8 @@ async fn main() -> anyhow::Result<()> {
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
-    let client = Socks5Processor::bind("127.0.0.1:1080", get_client_config()?).await?;
+    let client =
+        Socks5Processor::new("127.0.0.1:1080", get_client_config()?, "127.0.0.1", 1234).await?;
     client.run_socks5_loop().await;
     Ok(())
 }

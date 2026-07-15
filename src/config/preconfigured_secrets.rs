@@ -1,4 +1,4 @@
-use crate::config::{CertificateBundle, SecurityConfig};
+use crate::config::{compute_auth_hash_from_raw, CertificateBundle, SecurityConfig};
 use anyhow::Context;
 use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::pki_types::CertificateDer;
@@ -13,7 +13,7 @@ pub fn get_server_config() -> anyhow::Result<SecurityConfig> {
 
     Ok(SecurityConfig {
         self_cert_bundle: server_bundle,
-        auth_secret: AUTH_SECRET.into(),
+        auth_secret: compute_auth_hash_from_raw(AUTH_SECRET),
         ca_cert,
     })
 }
@@ -26,7 +26,7 @@ pub fn get_client_config() -> anyhow::Result<SecurityConfig> {
 
     Ok(SecurityConfig {
         self_cert_bundle: client_bundle,
-        auth_secret: AUTH_SECRET.into(),
+        auth_secret: compute_auth_hash_from_raw(AUTH_SECRET),
         ca_cert,
     })
 }

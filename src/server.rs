@@ -1,7 +1,7 @@
-use crate::config::SecurityConfig;
+use crate::config::{HashedAuthSecret, SecurityConfig};
 use crate::protocol::{
-    compute_auth_hash_from_raw, ConnectionEstablishErrorType, ConnectionEstablishMessageC2S,
-    ConnectionEstablishResponseS2C, HashedAuthSecret, WireMessage,
+    ConnectionEstablishErrorType, ConnectionEstablishMessageC2S, ConnectionEstablishResponseS2C,
+    WireMessage,
 };
 use crate::tls::build_server_tls_config;
 use anyhow::{bail, Context};
@@ -162,7 +162,7 @@ impl ProxyServer {
         Ok(Self {
             listener,
             tls_acceptor,
-            auth_secret: Arc::new(compute_auth_hash_from_raw(&security_config.auth_secret)),
+            auth_secret: Arc::new(security_config.auth_secret),
         })
     }
 
@@ -181,8 +181,8 @@ impl ProxyServer {
             let proxy_handler = ProxyHandler::new(client_stream, acceptor, auth_secret);
             tokio::spawn(async move {
                 let res = proxy_handler.handle_client().await;
-                if res.is_err() {
-                    warn!("handle client failed: {res:?}")
+                if let Err(err) = res {
+                    warn!("handle client failed: {err:#}")
                 }
             });
         }

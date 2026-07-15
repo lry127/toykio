@@ -49,19 +49,9 @@ pub async fn handle_target_addr_negotiation<T: AsyncRead + AsyncWrite + Unpin>(
 
     const CMD_CONNECT: u8 = 0x1;
     if cmd != CMD_CONNECT {
-        const CMD_NOT_SUPPORTED: u8 = 0x7;
-        write_buf.put_slice(&[
-            SOCKS5_PROTOCOL_VERSION,
-            CMD_NOT_SUPPORTED,
-            RESERVED,
-            0x1, /* atyp */
-            0x0,
-            0x0,
-            0x0,
-            0x0,
-            /* ip */ 0x0,
-            0x0, /* port */
-        ]);
+        write_buf.put_slice(&construct_connection_server_reply(
+            ConnectionServerReplyCode::CmdNotSupported,
+        ));
         let _ = stream.write_all_buf(write_buf).await;
         bail!("protocol error: client request: only tcp connect is supported");
     }
@@ -71,19 +61,9 @@ pub async fn handle_target_addr_negotiation<T: AsyncRead + AsyncWrite + Unpin>(
     const IPV4_ADDR_TYPE: u8 = 0x1;
     if addr_type != IPV4_ADDR_TYPE {
         // todo: support domain type (0x3) (name resolution happens here or at remote outbound server)
-        const ADDR_TYPE_NOT_SUPPORTED: u8 = 0x8;
-        write_buf.put_slice(&[
-            SOCKS5_PROTOCOL_VERSION,
-            ADDR_TYPE_NOT_SUPPORTED,
-            RESERVED,
-            0x1, /* atyp */
-            0x0,
-            0x0,
-            0x0,
-            0x0,
-            /* ip */ 0x0,
-            0x0, /* port */
-        ]);
+        write_buf.put_slice(&construct_connection_server_reply(
+            ConnectionServerReplyCode::AddrTypeNotSupported,
+        ));
         let _ = stream.write_all_buf(write_buf).await;
         bail!("protocol error: client request: only ipv4 addr type is supported");
     }
@@ -101,4 +81,32 @@ pub async fn handle_target_addr_negotiation<T: AsyncRead + AsyncWrite + Unpin>(
     // before sending response to socks5 client at our side
 
     Ok((target_ip, target_port))
+}
+
+#[repr(u8)]
+pub enum ConnectionServerReplyCode {
+    Success = 0x0,
+    GeneralFailure = 0x1,
+    ConnectionRefused = 0x5,
+    CmdNotSupported = 0x7,
+    AddrTypeNotSupported = 0x8,
+}
+
+pub fn construct_connection_server_reply(reply_code: ConnectionServerReplyCode) -> [u8; 10] {
+    [
+        SOCKS5_PROTOCOL_VERSION,
+        reply_code as u8,
+        RESERVED,
+        /* BIND_ADDR is intentionally set to all 0's */
+        /* atyp (1 byte) */
+        0x1,
+        /* ip (4 bytes) */
+        0x0,
+        0x0,
+        0x0,
+        0x0,
+        /* port (2 bytes) */
+        0x0,
+        0x0,
+    ]
 }
