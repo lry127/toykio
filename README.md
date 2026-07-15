@@ -37,7 +37,7 @@ Toykio (TOY toKIO) is a toy (but functional) network proxy written to get my han
 ### Medium
 
 - [ ] server: use constant time compare for 'auth secret' (by relying on external library)
-- [ ] socks5: support domain type (ATYP = 3) CONNECT command, see [RFC 1928](https://www.rfc-editor.org/info/rfc1928/). You need to modify the protocol.
+- [ ] socks5: support domain type (ATYP = 3) CONNECT command, see [RFC 1928](https://youtube.com/watch?v=dQw4w9WgXcQ). You need to modify the protocol.
 
 
 ### Challenging
