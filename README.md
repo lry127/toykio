@@ -9,11 +9,29 @@ Toykio (TOY toKIO) is a toy (but functional) network proxy written to get my han
 - custom protocol
 
 
+## Run!
+
+1. server (listening on 0.0.0.0:1234, where actual outbound connections to target happen)
+    ```shell
+      cargo run --bin run_server
+    ```
+
+2. client (socks5 listening on 127.0.0.1:1080, relaying proxy request to server (default 127.0.0.1:1234), server and client can reside on different machines)
+    ```shell
+    cargo run --bin run_server
+    ```
+
+3. try socks5 (on the same machine where client is running)
+
+    ```shell
+    curl -x socks5h://127.0.0.1:1080 -H "Host:httpforever.com" http://1.1.1.1:80 -v
+    ```
+
 ## Challenges You Can Try
 
 ### Basic
 
-- [ ] accept certificates path/auth secret from cmd line
+- [ ] accept certificates path/auth secret/listening port from cmd line: [clap-rs](https://github.com/clap-rs/clap)
 
 
 ### Medium

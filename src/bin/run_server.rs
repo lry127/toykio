@@ -13,7 +13,7 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::debug!("started");
     let config = toykio::config::preconfigured_secrets::get_server_config()?;
-    let mut proxy_server = ProxyServer::bind("127.0.0.1:1234", config).await?;
+    let mut proxy_server = ProxyServer::bind("0.0.0.0:1234", config).await?;
     let _ = proxy_server.server_loop().await;
     Ok(())
 }
