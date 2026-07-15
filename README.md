@@ -24,7 +24,7 @@ Toykio (TOY toKIO) is a toy (but functional) network proxy written to get my han
 3. try socks5 (on the same machine where client is running)
 
     ```shell
-    curl -x socks5h://127.0.0.1:1080 -H "Host:httpforever.com" http://1.1.1.1:80 -v
+    curl -x socks5h://127.0.0.1:1080 http://1.1.1.1:80 -v
     ```
 
 ## Challenges You Can Try
