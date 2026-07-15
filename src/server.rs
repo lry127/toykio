@@ -4,7 +4,7 @@ use crate::protocol::{
     WireMessage,
 };
 use crate::tls::build_server_tls_config;
-use anyhow::{bail, Context};
+use anyhow::{anyhow, bail, Context};
 use bytes::BytesMut;
 use std::fmt::{Debug, Formatter};
 use std::net::SocketAddrV4;
@@ -110,10 +110,12 @@ impl ProxyHandler {
         }
 
         let target_socket_addr = SocketAddrV4::new(msg.ip.into(), msg.port);
-        let target_stream = TcpStream::connect(target_socket_addr).await;
+        debug!("target is {target_socket_addr}");
+
+        let target_stream = timeout(Duration::from_secs(10), TcpStream::connect(target_socket_addr)).await;
         let error_type = match target_stream {
-            Ok(_) => ConnectionEstablishErrorType::Success,
-            Err(_) => ConnectionEstablishErrorType::TargetError,
+            Ok(Ok(_)) => ConnectionEstablishErrorType::Success,
+            _ => ConnectionEstablishErrorType::TargetError,
         };
 
         let write_res = Self::write_message(
@@ -122,8 +124,9 @@ impl ProxyHandler {
         )
         .await;
         match (target_stream, write_res) {
-            (Ok(target), Ok(_)) => Ok(target),
-            (Err(err), _) => Err(err).context("can't establish connection to target"),
+            (Ok(Ok(target)), Ok(_)) => Ok(target),
+            (Err(_), _)  => Err(anyhow!("timeout when establish connection to target")),
+            (Ok(Err(err)), _)  => Err(err).context("can't establish connection to target"),
             (_, Err(err)) => Err(err).context("can't send establish reply to client"),
         }
     }

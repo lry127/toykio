@@ -158,6 +158,7 @@ impl Socks5Processor {
             }
         };
 
+        debug!("tls handshake done");
         if let Err(err) = Self::establish_target_connection(
             &mut server_stream,
             &hashed_auth_secret,
@@ -177,6 +178,7 @@ impl Socks5Processor {
             Err(err).context("remote server to target failed")?;
         }
 
+        debug!("proxy server to target success");
         proxy_write_buf.put_slice(&construct_connection_server_reply(Success));
         proxy_client_stream
             .write_all_buf(&mut proxy_write_buf)
