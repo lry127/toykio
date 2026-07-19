@@ -4,13 +4,14 @@ use crate::protocol::{
     WireMessage,
 };
 use crate::tls::build_server_tls_config;
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use bytes::BytesMut;
 use std::fmt::{Debug, Formatter};
 use std::net::SocketAddrV4;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{copy_bidirectional, AsyncRead, AsyncWrite, AsyncWriteExt};
+use subtle::ConstantTimeEq;
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, copy_bidirectional};
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tokio::time::timeout;
 use tokio_rustls::TlsAcceptor;
@@ -93,7 +94,7 @@ impl ProxyHandler {
         .context("ConnectionEstablishMessageC2S timeout")?
         .context("can't read establishment msg")?;
 
-        if msg.hashed_auth_secret != *auth_secret {
+        if msg.hashed_auth_secret.ct_ne(auth_secret).unwrap_u8() == 1 {
             warn!("invalid auth secret, connection aborted");
             debug!(
                 "correct: {:?}, provided: {:?}",
