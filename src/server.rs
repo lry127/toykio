@@ -7,7 +7,6 @@ use crate::tls::build_server_tls_config;
 use anyhow::{Context, anyhow, bail};
 use bytes::BytesMut;
 use std::fmt::{Debug, Formatter};
-use std::net::SocketAddrV4;
 use std::sync::Arc;
 use std::time::Duration;
 use subtle::ConstantTimeEq;
@@ -110,7 +109,7 @@ impl ProxyHandler {
             bail!("incorrect auth secret");
         }
 
-        let target_socket_addr = SocketAddrV4::new(msg.ip.into(), msg.port);
+        let target_socket_addr = msg.target_host.resolve(msg.port).await?;
         debug!("target is {target_socket_addr}");
 
         let target_stream = timeout(

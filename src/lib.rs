@@ -8,6 +8,7 @@ pub mod protocol;
 pub(crate) mod tls;
 
 pub mod server;
+pub(crate) mod socks5;
 
 pub mod client;
 

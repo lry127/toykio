@@ -1,5 +1,6 @@
 use crate::config::HashedAuthSecret;
-use bytes::{Buf, BufMut, BytesMut};
+use crate::socks5::VariableHostRepr;
+use bytes::{BufMut, BytesMut};
 use num_enum::TryFromPrimitive;
 use std::io::{Error, ErrorKind};
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -14,14 +15,14 @@ pub trait WireMessage {
 
 pub struct ConnectionEstablishMessageC2S {
     pub hashed_auth_secret: HashedAuthSecret,
-    pub ip: u32,
+    pub target_host: VariableHostRepr,
     pub port: u16,
 }
 
 impl WireMessage for ConnectionEstablishMessageC2S {
     fn serialize_to_bytes(&self, buf: &mut BytesMut) {
         buf.put_slice(&self.hashed_auth_secret);
-        buf.put_u32(self.ip);
+        self.target_host.serialize_to_buf(buf);
         buf.put_u16(self.port);
     }
 
@@ -29,20 +30,14 @@ impl WireMessage for ConnectionEstablishMessageC2S {
     where
         Self: Sized,
     {
-        const MESSAGE_SIZE: u32 = 16 + u32::BITS / 8 + u16::BITS / 8;
-        let mut buf = [0u8; MESSAGE_SIZE as usize];
-
-        s.read_exact(&mut buf).await?;
-        let mut cursor = std::io::Cursor::new(buf);
-
         let mut hashed_auth_secret = [0u8; 16];
-        cursor.copy_to_slice(&mut hashed_auth_secret);
-        let ip = cursor.get_u32();
-        let port = cursor.get_u16();
+        s.read_exact(&mut hashed_auth_secret).await?;
+        let target_host = VariableHostRepr::read_from_stream(s).await?;
+        let port = s.read_u16().await?;
 
         Ok(Self {
             hashed_auth_secret,
-            ip,
+            target_host,
             port,
         })
     }

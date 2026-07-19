@@ -1,13 +1,12 @@
-use crate::client::socks5::ConnectionServerReplyCode::{
-    ConnectionRefused, GeneralFailure, Success,
-};
-use crate::client::socks5::{
-    construct_connection_server_reply, consume_client_hello, handle_target_addr_negotiation,
-};
 use crate::config::{HashedAuthSecret, SecurityConfig};
 use crate::protocol::{
     ConnectionEstablishErrorType, ConnectionEstablishMessageC2S, ConnectionEstablishResponseS2C,
     WireMessage,
+};
+use crate::socks5::ConnectionServerReplyCode::{ConnectionRefused, GeneralFailure, Success};
+use crate::socks5::{
+    VariableHostRepr, construct_connection_server_reply, consume_client_hello,
+    handle_target_addr_negotiation,
 };
 use crate::tls::build_client_tls_config;
 use anyhow::{Context, bail};
@@ -19,8 +18,6 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, copy_bidirectional};
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tokio_rustls::TlsConnector;
 use tracing::{debug, instrument, warn};
-
-mod socks5;
 
 pub struct Socks5Processor {
     tcp_listener: TcpListener,
@@ -120,19 +117,16 @@ impl Socks5Processor {
 
         debug!("client hello successful");
 
-        let (target_ip, target_port) = match handle_target_addr_negotiation(
-            &mut proxy_client_stream,
-            &mut proxy_read_buf,
-            &mut proxy_write_buf,
-        )
-        .await
-        {
-            Ok(res) => res,
-            Err(err) => {
-                proxy_client_stream.shutdown().await.ok();
-                bail!(err.context("socks5 connection establishment request failed"));
-            }
-        };
+        let (target_host, target_port) =
+            match handle_target_addr_negotiation(&mut proxy_client_stream, &mut proxy_write_buf)
+                .await
+            {
+                Ok(res) => res,
+                Err(err) => {
+                    proxy_client_stream.shutdown().await.ok();
+                    bail!(err.context("socks5 connection establishment request failed"));
+                }
+            };
 
         let connection_result = async {
             let tcp_stream = TcpStream::connect(server_addr).await?;
@@ -160,7 +154,7 @@ impl Socks5Processor {
         if let Err(err) = Self::establish_target_connection(
             &mut server_stream,
             hashed_auth_secret,
-            target_ip,
+            target_host,
             target_port,
         )
         .await
@@ -196,12 +190,12 @@ impl Socks5Processor {
     async fn establish_target_connection<T: AsyncRead + AsyncWrite + Unpin>(
         server_stream: &mut T,
         auth_secret: &HashedAuthSecret,
-        ip: u32,
+        target_host: VariableHostRepr,
         port: u16,
     ) -> anyhow::Result<()> {
         let c2s_conn_msg = ConnectionEstablishMessageC2S {
             hashed_auth_secret: *auth_secret,
-            ip,
+            target_host,
             port,
         };
         let mut buf = BytesMut::with_capacity(32);
