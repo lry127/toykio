@@ -39,6 +39,10 @@ jobs:
         RUSTFLAGS="-D warnings" cargo check --all-targets --all-features
         cargo clippy --all-targets --all-features -- -D warnings
     runAs: 0:0
+    registryLogins:
+      - registryUrl: '@server@'
+        userName: site_docker_pusher
+        passwordSecret: site_docker_pusher_secret
     useTTY: true
     condition: SUCCESSFUL
     optional: false
@@ -53,6 +57,10 @@ jobs:
         cargo build
         cargo test
     runAs: 0:0
+    registryLogins:
+      - registryUrl: '@server@'
+        userName: site_docker_pusher
+        passwordSecret: site_docker_pusher_secret
     useTTY: true
     condition: SUCCESSFUL
     optional: false
@@ -97,6 +105,10 @@ jobs:
     output:
       type: RegistryOutput
       tags: '@server@/@project_path@/rust:latest'
+      registryLogins:
+        - registryUrl: '@server@'
+          userName: site_docker_pusher
+          passwordSecret: site_docker_pusher_secret
     condition: SUCCESSFUL
     optional: false
   retryCondition: never
