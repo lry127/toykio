@@ -105,10 +105,10 @@ jobs:
     output:
       type: RegistryOutput
       tags: '@server@/@project_path@/rust:latest'
-      registryLogins:
-        - registryUrl: '@server@'
-          userName: site_docker_pusher
-          passwordSecret: site_docker_pusher_secret
+    registryLogins:
+      - registryUrl: '@server@'
+        userName: site_docker_pusher
+        passwordSecret: site_docker_pusher_secret
     condition: SUCCESSFUL
     optional: false
   retryCondition: never
