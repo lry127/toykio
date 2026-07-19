@@ -22,7 +22,7 @@ async fn main() -> anyhow::Result<()> {
     let client_security_config = match get_security_config_from_cli(&cli.security_config_args) {
         Ok(res) => res,
         Err(err) => {
-            bail!("failed to read client config: {err}")
+            bail!("failed to read security config: {err}")
         }
     };
 

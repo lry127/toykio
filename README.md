@@ -31,7 +31,7 @@ Toykio (TOY toKIO) is a toy (but functional) network proxy written to get my han
 
 ### Basic
 
-- [ ] accept certificates path/auth secret/listening port from cmd line: [clap-rs](https://github.com/clap-rs/clap)
+- [x] accept certificates path/auth secret/listening port from cmd line: [clap-rs](https://github.com/clap-rs/clap)
 
 
 ### Medium
