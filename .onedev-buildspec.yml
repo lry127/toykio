@@ -18,7 +18,6 @@ jobs:
     entries:
     - path: /usr/local/cargo/registry
     uploadStrategy: UPLOAD_IF_NOT_EXACT_MATCH
-    uploadProjectPath: test1
     condition: SUCCESSFUL
     optional: false
   - type: SetupCacheStep
