@@ -4,6 +4,7 @@ use num_enum::TryFromPrimitive;
 use std::io::{Error, ErrorKind};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
+#[allow(async_fn_in_trait)]
 pub trait WireMessage {
     fn serialize_to_bytes(&self, buf: &mut BytesMut);
     async fn read_from_stream<T: AsyncRead + Unpin>(s: &mut T) -> tokio::io::Result<Self>

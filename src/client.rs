@@ -3,7 +3,6 @@ use crate::client::socks5::ConnectionServerReplyCode::{
 };
 use crate::client::socks5::{
     construct_connection_server_reply, consume_client_hello, handle_target_addr_negotiation,
-    ConnectionServerReplyCode,
 };
 use crate::config::{HashedAuthSecret, SecurityConfig};
 use crate::protocol::{
@@ -11,14 +10,13 @@ use crate::protocol::{
     WireMessage,
 };
 use crate::tls::build_client_tls_config;
-use anyhow::{bail, Context};
-use bytes::{Buf, BufMut, BytesMut};
+use anyhow::{Context, bail};
+use bytes::{BufMut, BytesMut};
 use rustls::pki_types::ServerName;
-use rustls::ClientConfig;
-use std::net::{SocketAddr, SocketAddrV4};
+use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{copy_bidirectional, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::{lookup_host, TcpListener, TcpStream, ToSocketAddrs};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, copy_bidirectional};
+use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tokio_rustls::TlsConnector;
 use tracing::{debug, instrument, warn};
 
@@ -161,7 +159,7 @@ impl Socks5Processor {
         debug!("tls handshake done");
         if let Err(err) = Self::establish_target_connection(
             &mut server_stream,
-            &hashed_auth_secret,
+            hashed_auth_secret,
             target_ip,
             target_port,
         )
@@ -202,7 +200,7 @@ impl Socks5Processor {
         port: u16,
     ) -> anyhow::Result<()> {
         let c2s_conn_msg = ConnectionEstablishMessageC2S {
-            hashed_auth_secret: auth_secret.clone(),
+            hashed_auth_secret: *auth_secret,
             ip,
             port,
         };

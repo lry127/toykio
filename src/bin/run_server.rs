@@ -2,7 +2,7 @@ use anyhow::bail;
 use clap::Parser;
 use std::net::SocketAddr;
 use std::str::FromStr;
-use toykio::cli::{get_security_config_from_cli, SecurityConfigArgs};
+use toykio::cli::{SecurityConfigArgs, get_security_config_from_cli};
 use toykio::server::ProxyServer;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
@@ -25,7 +25,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     if let Err(err) = SocketAddr::from_str(&cli.listen_addr) {
-        bail!("listening addr {} is invalid: {}", &cli.listen_addr, err);
+        bail!("listening addr {} is invalid: {}", cli.listen_addr, err);
     }
 
     let subscriber = FmtSubscriber::builder()

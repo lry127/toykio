@@ -1,8 +1,8 @@
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use clap::Parser;
 use std::net::SocketAddr;
 use std::str::FromStr;
-use toykio::cli::{get_security_config_from_cli, SecurityConfigArgs};
+use toykio::cli::{SecurityConfigArgs, get_security_config_from_cli};
 use toykio::client::Socks5Processor;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
@@ -27,11 +27,11 @@ async fn main() -> anyhow::Result<()> {
     };
 
     if let Err(err) = SocketAddr::from_str(&cli.socks5_addr) {
-        bail!("socks5 addr {} is invalid: {}", &cli.socks5_addr, err);
+        bail!("socks5 addr {} is invalid: {}", cli.socks5_addr, err);
     }
 
     if let Err(err) = SocketAddr::from_str(&cli.remote_addr) {
-        bail!("remote proxy addr {} is invalid: {}", &cli.remote_addr, err);
+        bail!("remote proxy addr {} is invalid: {}", cli.remote_addr, err);
     }
 
     let (server_hostname, server_port) = &cli
@@ -49,10 +49,10 @@ async fn main() -> anyhow::Result<()> {
     let client = Socks5Processor::new(
         cli.socks5_addr,
         client_security_config,
-        *server_hostname,
+        server_hostname,
         server_port,
     )
-        .await?;
+    .await?;
     client.run_socks5_loop().await;
     Ok(())
 }
