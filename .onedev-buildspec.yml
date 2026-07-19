@@ -29,6 +29,21 @@ jobs:
     condition: SUCCESSFUL
     optional: false
   - type: CommandStep
+    name: reject all warnings
+    runInContainer: true
+    image: rust:latest
+    interpreter:
+      type: PosixInterpreter
+      shell: sh
+      commands: |
+        rustup component add clippy
+        RUSTFLAGS="-D warnings" cargo check --all-targets --all-features
+        cargo clippy --all-targets --all-features -- -D warnings
+    runAs: 0:0
+    useTTY: true
+    condition: SUCCESSFUL
+    optional: false
+  - type: CommandStep
     name: run cargo build
     runInContainer: true
     image: rust:latest
@@ -45,6 +60,7 @@ jobs:
   triggers:
   - type: BranchUpdateTrigger
     userMatch: anyone
+  - type: PullRequestUpdateTrigger
   retryCondition: never
   maxRetries: 3
   retryDelay: 30
