@@ -10,6 +10,7 @@ tokio-rustls = "0.26.4"
 rustls-post-quantum = "0.2.4"
 bytes = "1.12.1"
 sha2 = "0.11.0"
+subtle = "2.6.1"
 
 tracing = "0.1.11"
 tracing-subscriber = {version = "0.3.23", features = ["env-filter"]}
