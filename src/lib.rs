@@ -11,6 +11,8 @@ pub mod server;
 
 pub mod client;
 
+pub mod cli;
+
 #[allow(async_fn_in_trait)]
 pub trait ReadBufNExt {
     async fn read_buf_n(&mut self, buf: &mut BytesMut, n: usize) -> anyhow::Result<()>;
