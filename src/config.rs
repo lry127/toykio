@@ -37,3 +37,22 @@ pub struct SecurityConfig {
     pub ca_cert: CertificateDer<'static>,
     pub auth_secret: HashedAuthSecret,
 }
+
+impl SecurityConfig {
+    pub fn new<T: AsRef<Path>>(
+        cert_path: T,
+        key_path: T,
+        ca_path: T,
+        shared_secret_raw: &str,
+    ) -> anyhow::Result<Self> {
+        let self_cert_bundle = CertificateBundle::new(cert_path, key_path)?;
+        let ca_cert = CertificateDer::from_pem_file(ca_path)?;
+        let auth_secret = compute_auth_hash_from_raw(shared_secret_raw);
+        Ok(Self {
+            self_cert_bundle,
+            ca_cert,
+            auth_secret,
+        })
+    }
+}
+
