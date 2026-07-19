@@ -56,7 +56,7 @@ jobs:
     name: github
     remoteUrl: https://github.com/lry127/toykio.git
     passwordSecret: github mirror push
-    force: false
+    force: true
     condition: SUCCESSFUL
     optional: false
   triggers:
