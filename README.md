@@ -27,7 +27,7 @@ Toykio (TOY toKIO) is a toy (but functional) network proxy written to get my han
     curl -x socks5h://127.0.0.1:1080 http://1.1.1.1:80 -v
     ```
 
-## Challenges You Can Try
+## Todos
 
 ### Basic
 
@@ -39,8 +39,7 @@ Toykio (TOY toKIO) is a toy (but functional) network proxy written to get my han
 - [ ] server: use constant time comparison for 'auth secret' (by relying on external library)
 - [ ] socks5: support domain type (ATYP = 3) CONNECT command, see [RFC 1928](https://youtube.com/watch?v=dQw4w9WgXcQ). You need to modify the protocol.
 
-
-### Challenging
+### Hard
 
 - [ ] support multiplexing of proxy connections using the same underlying tls connection to server (m:n model, currently 1:1)
 
