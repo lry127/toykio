@@ -64,7 +64,7 @@ jobs:
   maxRetries: 3
   retryDelay: 30
   timeout: 14400
-- name: mirror to Github
+- name: Mirror to Github
   steps:
   - type: PushRepository
     name: github
@@ -76,6 +76,29 @@ jobs:
   triggers:
   - type: BranchUpdateTrigger
     userMatch: anyone
+  retryCondition: never
+  maxRetries: 3
+  retryDelay: 30
+  timeout: 14400
+- name: Build toolchain
+  steps:
+  - type: CheckoutStep
+    name: checkout out
+    cloneCredential:
+      type: DefaultCredential
+    withLfs: false
+    withSubmodules: false
+    cloneDepth: 1
+    condition: SUCCESSFUL
+    optional: false
+  - type: BuildImageStep
+    name: build toolchain image
+    dockerfile: toolchain.Dockerfile
+    output:
+      type: RegistryOutput
+      tags: code.cppdevs.com/toykio/rust:latest
+    condition: SUCCESSFUL
+    optional: false
   retryCondition: never
   maxRetries: 3
   retryDelay: 30
