@@ -1,59 +1,68 @@
 version: 52
 jobs:
-  - name: Build and Test
-    steps:
-      - type: CheckoutStep
-        name: checkout code
-        cloneCredential:
-          type: DefaultCredential
-        withLfs: false
-        withSubmodules: false
-        cloneDepth: 1
-        condition: SUCCESSFUL
-        optional: false
-      - type: SetupCacheStep
-        name: cargo cache setup
-        key: cargo-registry
-        checksumFiles: Cargo.lock
-        entries:
-          - path: /usr/local/cargo/registry
-        uploadStrategy: UPLOAD_IF_NOT_EXACT_MATCH
-        uploadProjectPath: test1
-        condition: SUCCESSFUL
-        optional: false
-      - type: SetupCacheStep
-        name: proj cache setup
-        key: cargo-target
-        entries:
-          - path: target
-        uploadStrategy: UPLOAD_IF_CHANGED
-        condition: SUCCESSFUL
-        optional: false
-      - type: CommandStep
-        name: run cargo build
-        runInContainer: true
-        image: rust:latest
-        interpreter:
-          type: PosixInterpreter
-          shell: sh
-          commands: |
-            cargo build
-        runAs: 0:0
-        useTTY: true
-        condition: SUCCESSFUL
-        optional: false
-      - type: RunContainerStep
-        name: run cargo test
-        image: rust:latest
-        args: cargo test
-        runAs: 0:0
-        useTTY: true
-        condition: SUCCESSFUL
-        optional: false
-    triggers:
-      - type: BranchUpdateTrigger
-        userMatch: anyone
-    retryCondition: never
-    maxRetries: 3
-    retryDelay: 30
-    timeout: 14400
+- name: Build and Test
+  steps:
+  - type: CheckoutStep
+    name: checkout code
+    cloneCredential:
+      type: DefaultCredential
+    withLfs: false
+    withSubmodules: false
+    cloneDepth: 1
+    condition: SUCCESSFUL
+    optional: false
+  - type: SetupCacheStep
+    name: cargo cache setup
+    key: cargo-registry
+    checksumFiles: Cargo.lock
+    entries:
+    - path: /usr/local/cargo/registry
+    uploadStrategy: UPLOAD_IF_NOT_EXACT_MATCH
+    uploadProjectPath: test1
+    condition: SUCCESSFUL
+    optional: false
+  - type: SetupCacheStep
+    name: proj cache setup
+    key: cargo-target
+    entries:
+    - path: target
+    uploadStrategy: UPLOAD_IF_CHANGED
+    condition: SUCCESSFUL
+    optional: false
+  - type: CommandStep
+    name: run cargo build
+    runInContainer: true
+    image: rust:latest
+    interpreter:
+      type: PosixInterpreter
+      shell: sh
+      commands: |
+        cargo build
+        cargo test
+    runAs: 0:0
+    useTTY: true
+    condition: SUCCESSFUL
+    optional: false
+  triggers:
+  - type: BranchUpdateTrigger
+    userMatch: anyone
+  retryCondition: never
+  maxRetries: 3
+  retryDelay: 30
+  timeout: 14400
+- name: mirror to Github
+  steps:
+  - type: PushRepository
+    name: github
+    remoteUrl: https://github.com/lry127/toykio.git
+    passwordSecret: github mirror push
+    force: false
+    condition: SUCCESSFUL
+    optional: false
+  triggers:
+  - type: BranchUpdateTrigger
+    userMatch: anyone
+  retryCondition: never
+  maxRetries: 3
+  retryDelay: 30
+  timeout: 14400
