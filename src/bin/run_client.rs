@@ -54,5 +54,6 @@ async fn main() -> anyhow::Result<()> {
     )
     .await?;
     client.run_socks5_loop().await;
+    println!("hello");
     Ok(())
 }
