@@ -31,7 +31,7 @@ jobs:
   - type: CommandStep
     name: reject all warnings
     runInContainer: true
-    image: code.cppdevs.com/toykio/rust:latest
+    image: @server@/@project_path@/rust:latest
     interpreter:
       type: PosixInterpreter
       shell: sh
@@ -45,7 +45,7 @@ jobs:
   - type: CommandStep
     name: run cargo build
     runInContainer: true
-    image: code.cppdevs.com/toykio/rust:latest
+    image: @server@/@project_path@/rust:latest
     interpreter:
       type: PosixInterpreter
       shell: sh
@@ -96,7 +96,7 @@ jobs:
     dockerfile: toolchain.Dockerfile
     output:
       type: RegistryOutput
-      tags: code.cppdevs.com/toykio/rust:latest
+      tags: @server@/@project_path@/rust:latest
     condition: SUCCESSFUL
     optional: false
   retryCondition: never
