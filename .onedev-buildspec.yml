@@ -31,12 +31,11 @@ jobs:
   - type: CommandStep
     name: reject all warnings
     runInContainer: true
-    image: rust:latest
+    image: code.cppdevs.com/toykio/rust:latest
     interpreter:
       type: PosixInterpreter
       shell: sh
       commands: |
-        rustup component add clippy
         RUSTFLAGS="-D warnings" cargo check --all-targets --all-features
         cargo clippy --all-targets --all-features -- -D warnings
     runAs: 0:0
@@ -46,7 +45,7 @@ jobs:
   - type: CommandStep
     name: run cargo build
     runInContainer: true
-    image: rust:latest
+    image: code.cppdevs.com/toykio/rust:latest
     interpreter:
       type: PosixInterpreter
       shell: sh
