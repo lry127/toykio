@@ -36,6 +36,7 @@ jobs:
       type: PosixInterpreter
       shell: sh
       commands: |
+        rustup component add clippy
         RUSTFLAGS="-D warnings" cargo check --all-targets --all-features
         cargo clippy --all-targets --all-features -- -D warnings
     runAs: 0:0
