@@ -6,18 +6,19 @@ use crate::protocol::{
 use crate::tls::build_server_tls_config;
 use anyhow::{Context, anyhow, bail};
 use bytes::BytesMut;
+use kcp_tokio::{KcpConfig, KcpListener, KcpStream};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
 use subtle::ConstantTimeEq;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, copy_bidirectional};
-use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
+use tokio::net::{TcpListener, TcpStream, ToSocketAddrs, lookup_host};
 use tokio::time::timeout;
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, instrument, warn};
 
 struct ProxyHandler {
-    tcp_stream: TcpStream,
+    tcp_stream: KcpStream,
     tls_acceptor: TlsAcceptor,
     auth_secret: Arc<HashedAuthSecret>,
 }
@@ -32,7 +33,7 @@ impl Debug for ProxyHandler {
 
 impl ProxyHandler {
     fn new(
-        tcp_stream: TcpStream,
+        tcp_stream: KcpStream,
         tls_acceptor: TlsAcceptor,
         auth_secret: Arc<HashedAuthSecret>,
     ) -> Self {
@@ -150,7 +151,7 @@ impl ProxyHandler {
 
 pub struct ProxyServer {
     tls_acceptor: TlsAcceptor,
-    listener: TcpListener,
+    listener: KcpListener,
     auth_secret: Arc<HashedAuthSecret>,
 }
 
@@ -159,7 +160,17 @@ impl ProxyServer {
         bind_addr: T,
         security_config: SecurityConfig,
     ) -> anyhow::Result<Self> {
-        let listener = TcpListener::bind(bind_addr).await?;
+        let config = KcpConfig::file_transfer();
+        let config = config.stream_mode(true);
+
+        let listener = KcpListener::bind(
+            lookup_host(bind_addr)
+                .await?
+                .next()
+                .context("can't lookup bind addr")?,
+            config,
+        )
+        .await?;
         let tls_config = build_server_tls_config(
             security_config.self_cert_bundle.certificate,
             security_config.self_cert_bundle.certificate_priv_key,
@@ -182,6 +193,7 @@ impl ProxyServer {
                     continue;
                 }
             };
+            debug!("server stream accepted");
 
             let acceptor = self.tls_acceptor.clone();
             let auth_secret = self.auth_secret.clone();

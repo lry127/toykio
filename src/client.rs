@@ -11,6 +11,7 @@ use crate::socks5::{
 use crate::tls::build_client_tls_config;
 use anyhow::{Context, bail};
 use bytes::{BufMut, BytesMut};
+use kcp_tokio::{KcpConfig, KcpStream};
 use rustls::pki_types::ServerName;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -129,7 +130,9 @@ impl Socks5Processor {
             };
 
         let connection_result = async {
-            let tcp_stream = TcpStream::connect(server_addr).await?;
+            let config = KcpConfig::file_transfer();
+            let config = config.stream_mode(true);
+            let tcp_stream = KcpStream::connect(*server_addr, config).await?;
 
             let tls_stream = tls_connector.connect(server_name, tcp_stream).await?;
             Ok::<_, anyhow::Error>(tls_stream)
