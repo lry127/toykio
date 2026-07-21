@@ -16,6 +16,8 @@ use tokio::time::timeout;
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, instrument, warn};
 
+compiler_error("make it fail to test")
+
 struct ProxyHandler {
     tcp_stream: TcpStream,
     tls_acceptor: TlsAcceptor,
