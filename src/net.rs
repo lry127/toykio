@@ -1,5 +1,6 @@
 use kcp_tokio::{KcpListener, KcpStream};
 use std::collections::HashMap;
+use std::io::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use thiserror::Error;
@@ -98,13 +99,26 @@ impl<T> FairFlowController<T> {
     }
 }
 
-struct ManagedStreamRecord<S2C> {
+struct ManagedStreamRecord<M> {
     id: ConnectionId,
     remote_addr: SocketAddr,
-    to_connection_sender: Sender<S2C>, // keep a copy in manager, this might be needed by manager user
+    to_connection_sender: Sender<M>, // keep a copy in manager, this might be needed by manager user
 }
 
-pub struct ConnectionManager<A, H, C2S: Send + 'static + Sync, S2C: Send + 'static + Sync>
+enum C2SMessage<T> {
+    NewConnectionEstablished(ConnectionId, SocketAddr),
+    ReadError(ConnectionId, Error),
+    WriteError(ConnectionId, Error),
+    OnApplicationMessage(ConnectionId, T),
+}
+
+enum S2CMessage<T> {
+    CreateNewConnection(SocketAddr),
+    SendApplicationMessage(ConnectionId, T),
+    AbortConnection(ConnectionId),
+}
+
+pub struct ConnectionManager<A, H, C2S, S2C: Send + 'static + Sync>
 where
     A: StreamAcceptor,
     H: StreamHandler + Send + Sync + 'static,
@@ -112,18 +126,24 @@ where
     acceptor: Option<A>,
     handler: Arc<H>,
     conn_id_counter: ConnectionId,
-    conn_flow_controller: FairFlowController<C2S>,
-    from_server_receiver: Receiver<S2C>,
-    to_server_sender: Sender<C2S>,
-    streams: HashMap<ConnectionId, ManagedStreamRecord<S2C>>,
+    conn_flow_controller: FairFlowController<C2SMessage<C2S>>,
+    from_server_receiver: Receiver<S2CMessage<S2C>>,
+    to_server_sender: Sender<C2SMessage<C2S>>,
+    streams: HashMap<ConnectionId, ManagedStreamRecord<S2CMessage<S2C>>>,
 }
 
 #[derive(Debug, Error)]
 pub enum EventError {
     #[error("failed to send c2s msg, broken channel")]
     SendC2SMsgFailed,
+    #[error("failed to recv s2c msg, broken channel")]
+    RecvS2CMsgFailed,
     #[error("failed to accept new socket")]
     AcceptNewSocketErr(#[from] tokio::io::Error),
+    #[error("failed to process c2s msg")]
+    C2SMsgProcessError,
+    #[error("failed to process s2c msg")]
+    S2CMsgProcessError,
 }
 
 impl<A, H, C2S: Send + 'static + Sync, S2C: Send + 'static + Sync> ConnectionManager<A, H, C2S, S2C>
@@ -132,9 +152,12 @@ where
     H: StreamHandler + Send + Sync + 'static,
 {
     // todo: wrap sender to make it easier to send to this manger from user struct
-    fn new(acceptor: Option<A>, handler: H) -> (Self, Sender<S2C>, Receiver<C2S>) {
-        let (sender_s2c, receiver_s2c) = channel::<S2C>(128);
-        let (sender_c2s, receiver_c2s) = channel::<C2S>(128);
+    fn new(
+        acceptor: Option<A>,
+        handler: H,
+    ) -> (Self, Sender<S2CMessage<S2C>>, Receiver<C2SMessage<C2S>>) {
+        let (sender_s2c, receiver_s2c) = channel::<S2CMessage<S2C>>(128);
+        let (sender_c2s, receiver_c2s) = channel::<C2SMessage<C2S>>(128);
 
         let manager = Self {
             acceptor,
@@ -162,7 +185,10 @@ where
                     break;
                 }
                 EventError::AcceptNewSocketErr(err) => {
-                    warn!("failed to accept new socket: {err}")
+                    warn!("failed to accept new socket: {err}");
+                }
+                other => {
+                    warn!("other event error: {other}");
                 }
             }
         }
@@ -171,21 +197,39 @@ where
     async fn clean(&mut self) {}
 
     async fn process_event_once(&mut self) -> Result<(), EventError> {
+        let accept_fut = async {
+            match &mut self.acceptor {
+                Some(acceptor) => Some(acceptor.accept_stream().await),
+                None => std::future::pending().await,
+            }
+        };
+
         select! {
             msg = self.conn_flow_controller.get_next_msg(), if self.conn_flow_controller.is_msg_possible() => {
                if let Some((id, msg)) = msg {
                     self.process_c2s_from_connections(id, msg).await?;
                }
             },
-            accept_res = self.acceptor.as_mut().unwrap().accept_stream(), if self.acceptor.is_some() => {
-                match accept_res {
-                    Ok((s, addr)) => {
-                        self.handle_new_connection(s, addr).await;
-                    },
-                    Err(err) => {
-                        return Err(EventError::AcceptNewSocketErr(err))
+
+            accept_res = accept_fut => {
+                if let Some(accept_res) = accept_res {
+                    match accept_res {
+                        Ok((s, addr)) => {
+                            self.handle_new_connection(s, addr).await;
+                        },
+                        Err(err) => {
+                            return Err(EventError::AcceptNewSocketErr(err))
+                        }
                     }
                 }
+            },
+
+            s2c_msg = self.from_server_receiver.recv() => {
+                let s2c_msg = match s2c_msg {
+                    None => return Err(EventError::RecvS2CMsgFailed),
+                    Some(msg) => msg
+                };
+                self.process_s2c_msg(s2c_msg).await?;
             }
         }
         Ok(())
@@ -194,12 +238,16 @@ where
     async fn process_c2s_from_connections(
         &mut self,
         id: ConnectionId,
-        msg: C2S,
+        msg: C2SMessage<C2S>,
     ) -> Result<(), EventError> {
         self.to_server_sender
             .send(msg)
             .await
             .map_err(|_| EventError::SendC2SMsgFailed)
+    }
+
+    async fn process_s2c_msg(&mut self, msg: S2CMessage<S2C>) -> Result<(), EventError> {
+        Ok(())
     }
 
     async fn handle_new_connection(&mut self, s: A::Stream, addr: SocketAddr) {
@@ -217,13 +265,13 @@ where
         &mut self,
         remote_addr: SocketAddr,
     ) -> (
-        Sender<C2S>,
-        Receiver<C2S>,
-        Receiver<S2C>,
-        ManagedStreamRecord<S2C>,
+        Sender<C2SMessage<C2S>>,
+        Receiver<C2SMessage<C2S>>,
+        Receiver<S2CMessage<S2C>>,
+        ManagedStreamRecord<S2CMessage<S2C>>,
     ) {
-        let (sender_c2s, receiver_c2s) = channel::<C2S>(32);
-        let (sender_s2c, receiver_s2c) = channel::<S2C>(32);
+        let (sender_c2s, receiver_c2s) = channel::<C2SMessage<C2S>>(32);
+        let (sender_s2c, receiver_s2c) = channel::<S2CMessage<S2C>>(32);
 
         let record = ManagedStreamRecord {
             id: self.conn_id_counter,
