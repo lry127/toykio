@@ -54,7 +54,7 @@ impl StreamAcceptor for KcpStreamAcceptor {
         self.kcp_listener
             .accept()
             .await
-            .map_err(|e| tokio::io::Error::other(e))
+            .map_err(tokio::io::Error::other)
     }
 }
 
