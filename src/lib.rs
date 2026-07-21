@@ -3,6 +3,7 @@ use bytes::BytesMut;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 pub mod config;
+pub mod net;
 pub mod protocol;
 
 pub(crate) mod tls;
