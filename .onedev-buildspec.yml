@@ -40,9 +40,9 @@ jobs:
         cargo clippy --all-targets --all-features -- -D warnings
     runAs: 0:0
     registryLogins:
-      - registryUrl: '@server@'
-        userName: site_docker_pusher
-        passwordSecret: site_docker_pusher_secret
+    - registryUrl: '@server@'
+      userName: site_docker_pusher
+      passwordSecret: site_docker_pusher_secret
     useTTY: true
     condition: SUCCESSFUL
     optional: false
@@ -58,9 +58,9 @@ jobs:
         cargo test
     runAs: 0:0
     registryLogins:
-      - registryUrl: '@server@'
-        userName: site_docker_pusher
-        passwordSecret: site_docker_pusher_secret
+    - registryUrl: '@server@'
+      userName: site_docker_pusher
+      passwordSecret: site_docker_pusher_secret
     useTTY: true
     condition: SUCCESSFUL
     optional: false
@@ -72,6 +72,10 @@ jobs:
   maxRetries: 3
   retryDelay: 30
   timeout: 14400
+  postBuildActions:
+  - type: SendNotificationAction
+    condition: failed
+    receivers: committers
 - name: Mirror to Github
   steps:
   - type: PushRepository
@@ -106,9 +110,9 @@ jobs:
       type: RegistryOutput
       tags: '@server@/@project_path@/rust:latest'
     registryLogins:
-      - registryUrl: '@server@'
-        userName: site_docker_pusher
-        passwordSecret: site_docker_pusher_secret
+    - registryUrl: '@server@'
+      userName: site_docker_pusher
+      passwordSecret: site_docker_pusher_secret
     condition: SUCCESSFUL
     optional: false
   retryCondition: never
