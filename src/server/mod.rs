@@ -1,3 +1,4 @@
+mod proxy_manager;
 use crate::config::{HashedAuthSecret, SecurityConfig};
 use crate::protocol::{
     ConnectionEstablishErrorType, ConnectionEstablishMessageC2S, ConnectionEstablishResponseS2C,
