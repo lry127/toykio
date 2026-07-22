@@ -6,7 +6,6 @@ use tracing::{debug, instrument, warn};
 
 #[derive(Error, Debug)]
 pub enum DataEndpointError {
-    // ExpectedDataEof is removed. We use Option<Bytes> to signal clean EOF.
     #[error("io failed due to underlying transport error {0}")]
     IoError(#[from] tokio::io::Error),
 }
@@ -19,7 +18,6 @@ pub trait DataEndpoint {
 }
 
 pub trait DataReader {
-    // Now returns Option<Bytes> to idiomatically handle clean EOFs
     fn read_data(
         &mut self,
     ) -> impl Future<Output = Result<Option<Bytes>, DataEndpointError>> + Send + '_;
@@ -33,7 +31,7 @@ pub trait DataWriter {
     fn shutdown(&mut self) -> impl Future<Output = Result<(), DataEndpointError>> + Send + '_;
 }
 
-struct BackPressuredBidirectionalEndpointCopier<A, B>
+struct BidirectionalCopier<A, B>
 where
     A: DataEndpoint,
     B: DataEndpoint,
@@ -42,7 +40,7 @@ where
     endpoint_bob: B,
 }
 
-impl<A, B> BackPressuredBidirectionalEndpointCopier<A, B>
+impl<A, B> BidirectionalCopier<A, B>
 where
     A: DataEndpoint,
     B: DataEndpoint,
@@ -112,7 +110,7 @@ impl ProxyManager {
     async fn start_session<A: DataEndpoint, B: DataEndpoint>(endpoint_a: A, endpoint_b: B) {
         let token = CancellationToken::new();
 
-        let copier = BackPressuredBidirectionalEndpointCopier {
+        let copier = BidirectionalCopier {
             endpoint_alice: endpoint_a,
             endpoint_bob: endpoint_b,
         };
