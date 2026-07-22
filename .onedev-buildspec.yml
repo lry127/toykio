@@ -36,6 +36,12 @@ jobs:
       type: PosixInterpreter
       shell: sh
       commands: |
+        cat << 'EOF' >> $HOME/.cargo/config.toml
+        [registries.onedev]
+        index = "sparse+@server_url@/@project_path@/~cargo/"
+        credential-provider = "cargo:token"
+        EOF
+
         echo @secret:site_docker_pusher_secret@ | cargo login --registry onedev
     runAs: 0:0
     registryLogins:
