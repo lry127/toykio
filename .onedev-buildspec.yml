@@ -37,7 +37,7 @@ jobs:
       shell: sh
       commands: |
         mkdir $HOME/.cargo/
-        cat << 'EOF' >> $HOME/.cargo/config.toml
+        cat << 'EOF' >> $CARGO_HOME/config.toml
         [registries.onedev]
         index = "sparse+@server_url@/@project_path@/~cargo/"
         credential-provider = "cargo:token"
