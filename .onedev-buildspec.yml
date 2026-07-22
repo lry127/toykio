@@ -39,9 +39,10 @@ jobs:
         mkdir $HOME/.cargo/
         cat << 'EOF' >> $HOME/.cargo/config.toml
         [registries.onedev]
-        index = "sparse+@server_url@/@project_path@/~cargo/"
+        index = "sparse+https://code.cppdevs.com/toykio/~cargo/"
         credential-provider = "cargo:token"
         EOF
+        cat $HOME/.cargo/config.toml
 
         echo @secret:site_docker_pusher_secret@ | cargo login --registry onedev
     runAs: 0:0
