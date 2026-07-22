@@ -68,7 +68,6 @@ impl KcpStreamAcceptor {
 }
 
 pub trait StreamHandler {
-    #[allow(clippy::manual_async_fn)] // we need to explicitly make the returned Future Send
     fn handle_stream<T: StreamConnection + 'static>(
         &self,
         stream: T,
@@ -128,17 +127,15 @@ mod tests {
     async fn ensure_same_handler_work_for_both_tcp_and_kcp() -> anyhow::Result<()> {
         struct Handler;
         impl StreamHandler for Handler {
-            fn handle_stream<T: StreamConnection + 'static>(
+            async fn handle_stream<T: StreamConnection + 'static>(
                 &self,
                 stream: T,
                 _addr: SocketAddr,
-            ) -> impl Future<Output = ()> + Send + '_ {
-                async move {
-                    let (mut reader, mut writer) = tokio::io::split(stream);
+            ) {
+                let (mut reader, mut writer) = tokio::io::split(stream);
 
-                    if let Err(e) = tokio::io::copy(&mut reader, &mut writer).await {
-                        eprintln!("Echo failed: {}", e);
-                    }
+                if let Err(e) = tokio::io::copy(&mut reader, &mut writer).await {
+                    eprintln!("Echo failed: {}", e);
                 }
             }
         }
