@@ -39,7 +39,7 @@ jobs:
         mkdir $HOME/.cargo/
         cat << 'EOF' >> $HOME/.cargo/config.toml
         [registries.onedev]
-        index = "sparse+https://code.cppdevs.com/toykio/~cargo/"
+        index = "sparse+@server_url@/@project_path@/~cargo/"
         credential-provider = "cargo:token"
         EOF
         cat $HOME/.cargo/config.toml
