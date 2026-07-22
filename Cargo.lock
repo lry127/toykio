@@ -360,9 +360,9 @@ dependencies = [
 
 [[package]]
 name = "kcp-tokio"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfadc3df339a426dca20e1207d28dd90c0e8e3474b9e28a8138741d4043fca8e"
+version = "0.7.1"
+source = "sparse+https://code.cppdevs.com/toykio/~cargo/"
+checksum = "dd0fea1ce2f34b77b513f4ce6ef45b37eb8d17a87a6b156e088212144c7f8be5"
 dependencies = [
  "bytes",
  "dashmap",
