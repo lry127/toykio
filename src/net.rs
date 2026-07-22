@@ -1,8 +1,8 @@
-use kcp_tokio::{KcpListener, KcpStream};
+use kcp_tokio::{KcpConfig, KcpListener, KcpStream, UdpTransport};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tracing::warn;
 
 pub trait ReadStream: AsyncRead + Send + Unpin {}
@@ -24,7 +24,7 @@ pub trait StreamAcceptor {
 }
 
 pub struct TcpStreamAcceptor {
-    tcp_listener: TcpListener,
+    pub tcp_listener: TcpListener,
 }
 
 impl StreamAcceptor for TcpStreamAcceptor {
@@ -36,8 +36,15 @@ impl StreamAcceptor for TcpStreamAcceptor {
     }
 }
 
+impl TcpStreamAcceptor {
+    pub async fn bind<T: ToSocketAddrs>(addr: T) -> tokio::io::Result<Self> {
+        let tcp_listener = TcpListener::bind(addr).await?;
+        Ok(Self { tcp_listener })
+    }
+}
+
 pub struct KcpStreamAcceptor {
-    kcp_listener: KcpListener,
+    pub kcp_listener: KcpListener,
 }
 
 impl StreamAcceptor for KcpStreamAcceptor {
@@ -50,14 +57,29 @@ impl StreamAcceptor for KcpStreamAcceptor {
     }
 }
 
-pub trait StreamHandler<T: StreamConnection + 'static> {
-    fn handle_stream(&self, stream: T, addr: SocketAddr) -> impl Future<Output = ()> + Send + '_;
+impl KcpStreamAcceptor {
+    pub async fn bind(addr: impl ToSocketAddrs, kcp_config: KcpConfig) -> tokio::io::Result<Self> {
+        let udp_transport = UdpTransport::bind(addr).await?;
+        let kcp_listener = KcpListener::with_transport(Arc::new(udp_transport), kcp_config)
+            .await
+            .map_err(tokio::io::Error::other)?;
+        Ok(Self { kcp_listener })
+    }
+}
+
+pub trait StreamHandler {
+    #[allow(clippy::manual_async_fn)] // we need to explicitly make the returned Future Send
+    fn handle_stream<T: StreamConnection + 'static>(
+        &self,
+        stream: T,
+        addr: SocketAddr,
+    ) -> impl Future<Output = ()> + Send + '_;
 }
 
 pub struct ConnectionManager<A, H>
 where
     A: StreamAcceptor,
-    H: StreamHandler<A::Stream> + 'static + Send + Sync,
+    H: StreamHandler + 'static + Send + Sync,
 {
     stream_acceptor: A,
     handler: Arc<H>,
@@ -66,7 +88,7 @@ where
 impl<A, H> ConnectionManager<A, H>
 where
     A: StreamAcceptor,
-    H: StreamHandler<A::Stream> + 'static + Send + Sync,
+    H: StreamHandler + 'static + Send + Sync,
 {
     pub fn new(stream_acceptor: A, handler: H) -> Self {
         Self {
@@ -89,5 +111,77 @@ where
                 handler.handle_stream(s, addr).await;
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::net::{
+        ConnectionManager, KcpStreamAcceptor, StreamConnection, StreamHandler, TcpStreamAcceptor,
+    };
+    use kcp_tokio::{KcpConfig, KcpStream};
+    use std::net::SocketAddr;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    #[tokio::test]
+    async fn ensure_same_handler_work_for_both_tcp_and_kcp() -> anyhow::Result<()> {
+        struct Handler;
+        impl StreamHandler for Handler {
+            fn handle_stream<T: StreamConnection + 'static>(
+                &self,
+                stream: T,
+                _addr: SocketAddr,
+            ) -> impl Future<Output = ()> + Send + '_ {
+                async move {
+                    let (mut reader, mut writer) = tokio::io::split(stream);
+
+                    if let Err(e) = tokio::io::copy(&mut reader, &mut writer).await {
+                        eprintln!("Echo failed: {}", e);
+                    }
+                }
+            }
+        }
+
+        let addr = "127.0.0.1:0";
+        let msg = b"hello async world";
+        // tcp
+        {
+            let tcp_acceptor = TcpStreamAcceptor::bind(addr).await?;
+            let local_addr = tcp_acceptor.tcp_listener.local_addr()?;
+
+            let manager = ConnectionManager::new(tcp_acceptor, Handler);
+            tokio::spawn(async move {
+                manager.run_accept_loop().await;
+            });
+
+            let mut client = TcpStream::connect(local_addr).await?;
+
+            client.write_all(msg).await?;
+            let mut buf = vec![0; msg.len()];
+            client.read_exact(&mut buf).await?;
+
+            assert_eq!(&buf, msg);
+        }
+
+        // kcp
+        {
+            let kcp_acceptor = KcpStreamAcceptor::bind(addr, KcpConfig::file_transfer()).await?;
+            let local_addr = *kcp_acceptor.kcp_listener.local_addr();
+
+            // Pass the original handler to the KCP manager
+            let manager = ConnectionManager::new(kcp_acceptor, Handler);
+            tokio::spawn(async move {
+                manager.run_accept_loop().await;
+            });
+
+            let mut client = KcpStream::connect(local_addr, KcpConfig::file_transfer()).await?;
+            client.write_all(msg).await?;
+
+            let mut buf = vec![0; msg.len()];
+            client.read_exact(&mut buf).await?;
+            assert_eq!(&buf, msg);
+        }
+        Ok(())
     }
 }
