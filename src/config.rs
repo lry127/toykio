@@ -4,8 +4,6 @@ use std::path::Path;
 use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
-pub mod preconfigured_secrets;
-
 pub type HashedAuthSecret = [u8; 16];
 pub fn compute_auth_hash_from_raw(raw: &str) -> HashedAuthSecret {
     let hash = Sha256::digest(raw.as_bytes());

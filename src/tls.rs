@@ -85,9 +85,9 @@ impl<T: StreamHandler> ServerTlsStreamHandler<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::preconfigured_secrets::{get_client_config, get_server_config};
     use crate::net::{ConnectionManager, KcpStreamAcceptor, StreamAcceptor, TcpStreamAcceptor};
     use crate::test_helpers::SimpleEchoHandler;
+    use crate::test_helpers::{get_client_config, get_server_config};
     use kcp_tokio::{KcpConfig, KcpStream};
     use rustls::pki_types::ServerName;
     use std::sync::Arc;
