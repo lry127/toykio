@@ -20,7 +20,10 @@ impl<T> StreamConnection for T where T: ReadStream + WriteStream {}
 #[allow(async_fn_in_trait)]
 pub trait StreamAcceptor {
     type Stream: StreamConnection + 'static + Send;
-    async fn accept_stream(&mut self) -> tokio::io::Result<(Self::Stream, SocketAddr)>;
+    fn accept_stream(
+        &mut self,
+    ) -> impl Future<Output = tokio::io::Result<(Self::Stream, SocketAddr)>> + Send + '_;
+    fn get_local_addr(&self) -> Option<SocketAddr>;
 }
 
 pub struct TcpStreamAcceptor {
@@ -33,6 +36,10 @@ impl StreamAcceptor for TcpStreamAcceptor {
     async fn accept_stream(&mut self) -> tokio::io::Result<(TcpStream, SocketAddr)> {
         let (stream, addr) = self.tcp_listener.accept().await?;
         Ok((stream, addr))
+    }
+
+    fn get_local_addr(&self) -> Option<SocketAddr> {
+        self.tcp_listener.local_addr().ok()
     }
 }
 
@@ -54,6 +61,10 @@ impl StreamAcceptor for KcpStreamAcceptor {
             .accept()
             .await
             .map_err(tokio::io::Error::other)
+    }
+
+    fn get_local_addr(&self) -> Option<SocketAddr> {
+        Some(*self.kcp_listener.local_addr())
     }
 }
 
@@ -77,7 +88,7 @@ pub trait StreamHandler {
 
 pub struct ConnectionManager<A, H>
 where
-    A: StreamAcceptor,
+    A: StreamAcceptor + 'static + Send + Sync,
     H: StreamHandler + 'static + Send + Sync,
 {
     stream_acceptor: A,
@@ -86,7 +97,7 @@ where
 
 impl<A, H> ConnectionManager<A, H>
 where
-    A: StreamAcceptor,
+    A: StreamAcceptor + 'static + Send + Sync,
     H: StreamHandler + 'static + Send + Sync,
 {
     pub fn new(stream_acceptor: A, handler: H) -> Self {
@@ -123,23 +134,19 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
 
-    #[tokio::test]
-    async fn ensure_same_handler_work_for_both_tcp_and_kcp() -> anyhow::Result<()> {
-        struct Handler;
-        impl StreamHandler for Handler {
-            async fn handle_stream<T: StreamConnection + 'static>(
-                &self,
-                stream: T,
-                _addr: SocketAddr,
-            ) {
-                let (mut reader, mut writer) = tokio::io::split(stream);
+    struct SimpleEchoHandler;
+    impl StreamHandler for SimpleEchoHandler {
+        async fn handle_stream<T: StreamConnection + 'static>(&self, stream: T, _addr: SocketAddr) {
+            let (mut reader, mut writer) = tokio::io::split(stream);
 
-                if let Err(e) = tokio::io::copy(&mut reader, &mut writer).await {
-                    eprintln!("Echo failed: {}", e);
-                }
+            if let Err(e) = tokio::io::copy(&mut reader, &mut writer).await {
+                eprintln!("Echo failed: {}", e);
             }
         }
+    }
 
+    #[tokio::test]
+    async fn ensure_same_handler_work_for_both_tcp_and_kcp() -> anyhow::Result<()> {
         let addr = "127.0.0.1:0";
         let msg = b"hello async world";
         // tcp
@@ -147,7 +154,7 @@ mod tests {
             let tcp_acceptor = TcpStreamAcceptor::bind(addr).await?;
             let local_addr = tcp_acceptor.tcp_listener.local_addr()?;
 
-            let manager = ConnectionManager::new(tcp_acceptor, Handler);
+            let manager = ConnectionManager::new(tcp_acceptor, SimpleEchoHandler);
             tokio::spawn(async move {
                 manager.run_accept_loop().await;
             });
@@ -167,7 +174,7 @@ mod tests {
             let local_addr = *kcp_acceptor.kcp_listener.local_addr();
 
             // Pass the original handler to the KCP manager
-            let manager = ConnectionManager::new(kcp_acceptor, Handler);
+            let manager = ConnectionManager::new(kcp_acceptor, SimpleEchoHandler);
             tokio::spawn(async move {
                 manager.run_accept_loop().await;
             });
