@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use subtle::ConstantTimeEq;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, copy_bidirectional};
-use tokio::net::{TcpListener, TcpStream, ToSocketAddrs, lookup_host};
+use tokio::net::{TcpStream, ToSocketAddrs, lookup_host};
 use tokio::time::timeout;
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, instrument, warn};
