@@ -40,6 +40,7 @@ jobs:
         cat << 'EOF' > .cargo/config.toml
         [registries.onedev]
         index = "sparse+@server_url@/@project_path@/~cargo/"
+        credential-provider = "cargo:token"
         EOF
     runAs: 0:0
     registryLogins:
