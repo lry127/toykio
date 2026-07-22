@@ -39,7 +39,7 @@ jobs:
         echo @secret:site_docker_pusher_secret@ | cargo login --registry onedev
     runAs: 0:0
     registryLogins:
-    - registryUrl: '@server_rul@'
+    - registryUrl: '@server_url@'
       userName: '@job_token@'
       passwordSecret: site_docker_pusher_secret
     useTTY: true
