@@ -118,7 +118,7 @@ mod tests {
         let tls_acceptor = TlsAcceptor::from(Arc::new(get_server_tls_cfg()?));
         let tls_connector = TlsConnector::from(Arc::new(get_client_tls_cfg()?));
 
-        let listener = TcpListener::bind("127.0.0.1:12340").await?;
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
 
         let server_task = tokio::spawn(async move {
