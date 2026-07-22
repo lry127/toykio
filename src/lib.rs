@@ -6,7 +6,7 @@ pub mod config;
 pub mod net;
 pub mod protocol;
 
-pub(crate) mod tls;
+pub mod tls;
 
 pub mod server;
 pub(crate) mod socks5;
@@ -14,6 +14,9 @@ pub(crate) mod socks5;
 pub mod client;
 
 pub mod cli;
+
+#[cfg(test)]
+pub(crate) mod test_helpers;
 
 #[allow(async_fn_in_trait)]
 pub trait ReadBufNExt {

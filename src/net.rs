@@ -83,7 +83,7 @@ pub trait StreamHandler {
         &self,
         stream: T,
         addr: SocketAddr,
-    ) -> impl Future<Output = ()> + Send + '_;
+    ) -> impl Future<Output = anyhow::Result<()>> + Send + '_;
 }
 
 pub struct ConnectionManager<A, H>
@@ -118,7 +118,10 @@ where
             };
             let handler = self.handler.clone();
             tokio::spawn(async move {
-                handler.handle_stream(s, addr).await;
+                let res = handler.handle_stream(s, addr).await;
+                if let Err(err) = res {
+                    warn!("failed to handle stream ({addr}): {err}")
+                }
             });
         }
     }
@@ -126,24 +129,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::net::{
-        ConnectionManager, KcpStreamAcceptor, StreamConnection, StreamHandler, TcpStreamAcceptor,
-    };
+    use crate::net::{ConnectionManager, KcpStreamAcceptor, TcpStreamAcceptor};
+    use crate::test_helpers::SimpleEchoHandler;
     use kcp_tokio::{KcpConfig, KcpStream};
-    use std::net::SocketAddr;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
-
-    struct SimpleEchoHandler;
-    impl StreamHandler for SimpleEchoHandler {
-        async fn handle_stream<T: StreamConnection + 'static>(&self, stream: T, _addr: SocketAddr) {
-            let (mut reader, mut writer) = tokio::io::split(stream);
-
-            if let Err(e) = tokio::io::copy(&mut reader, &mut writer).await {
-                eprintln!("Echo failed: {}", e);
-            }
-        }
-    }
 
     #[tokio::test]
     async fn ensure_same_handler_work_for_both_tcp_and_kcp() -> anyhow::Result<()> {
