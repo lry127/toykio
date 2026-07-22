@@ -1,15 +1,14 @@
+use crate::net::ToManagerMessage::GetRemoteAddr;
 use kcp_tokio::{KcpListener, KcpStream};
 use std::collections::HashMap;
-use std::io::Error;
+use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::select;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
-use tokio_stream::wrappers::ReceiverStream;
-use tokio_stream::{StreamExt, StreamMap};
+use tokio::sync::oneshot;
 use tracing::{error, warn};
 
 pub type ConnectionId = u64;
@@ -59,136 +58,153 @@ impl StreamAcceptor for KcpStreamAcceptor {
     }
 }
 
-pub trait StreamHandler {
-    fn handle_stream<C2S, S2C>(
+/// handle io for one connection stream
+pub trait IoHandler {
+    type IoToLogicMsgType;
+    type LogicToIoMsgType;
+    fn handle_stream(
         &self,
         stream: impl StreamConnection + Send + 'static,
-        to_server_sender: Sender<C2S>,
-        from_server_receiver: Receiver<S2C>,
+        io_context: ClientConnectionContext<Self::IoToLogicMsgType, Self::LogicToIoMsgType>,
     ) -> impl Future<Output = ()> + Send + '_;
 }
 
-pub struct FairFlowController<T> {
-    active_channels: StreamMap<ConnectionId, ReceiverStream<T>>,
+/// handle logic for many connections
+pub trait LogicHandler {
+    type IoToLogicMsgType;
+    type LogicToIoMsgType;
+    fn handle_logic(
+        self,
+        io_context: ServerConnectionContext<Self::IoToLogicMsgType, Self::LogicToIoMsgType>,
+    ) -> impl Future<Output = ()> + Send;
 }
 
-impl<T> FairFlowController<T> {
-    fn new() -> Self {
-        FairFlowController {
-            active_channels: StreamMap::new(),
-        }
-    }
-}
-
-impl<T> FairFlowController<T> {
-    fn add_connection(&mut self, id: ConnectionId, receiver: Receiver<T>) {
-        let stream = ReceiverStream::new(receiver);
-        self.active_channels.insert(id, stream);
-    }
-
-    fn remove_connection(&mut self, id: ConnectionId) {
-        self.active_channels.remove(&id);
-    }
-
-    async fn get_next_msg(&mut self) -> Option<(ConnectionId, T)> {
-        self.active_channels.next().await
-    }
-
-    fn is_msg_possible(&self) -> bool {
-        !self.active_channels.is_empty()
-    }
-}
-
-struct ManagedStreamRecord<M> {
+struct StreamRecord {
     id: ConnectionId,
     remote_addr: SocketAddr,
-    to_connection_sender: Sender<M>, // keep a copy in manager, this might be needed by manager user
 }
 
-enum C2SMessage<T> {
-    NewConnectionEstablished(ConnectionId, SocketAddr),
-    ReadError(ConnectionId, Error),
-    WriteError(ConnectionId, Error),
-    OnApplicationMessage(ConnectionId, T),
-}
-
-enum S2CMessage<T> {
-    CreateNewConnection(SocketAddr),
-    SendApplicationMessage(ConnectionId, T),
-    AbortConnection(ConnectionId),
-}
-
-pub struct ConnectionManager<A, H, C2S, S2C: Send + 'static + Sync>
-where
-    A: StreamAcceptor,
-    H: StreamHandler + Send + Sync + 'static,
-{
-    acceptor: Option<A>,
-    handler: Arc<H>,
-    conn_id_counter: ConnectionId,
-    conn_flow_controller: FairFlowController<C2SMessage<C2S>>,
-    from_server_receiver: Receiver<S2CMessage<S2C>>,
-    to_server_sender: Sender<C2SMessage<C2S>>,
-    streams: HashMap<ConnectionId, ManagedStreamRecord<S2CMessage<S2C>>>,
-}
+type OneshotSender<T> = oneshot::Sender<T>;
+type OneshotReceiver<T> = oneshot::Receiver<T>;
 
 #[derive(Debug, Error)]
-pub enum EventError {
-    #[error("failed to send c2s msg, broken channel")]
-    SendC2SMsgFailed,
-    #[error("failed to recv s2c msg, broken channel")]
-    RecvS2CMsgFailed,
-    #[error("failed to accept new socket")]
-    AcceptNewSocketErr(#[from] tokio::io::Error),
-    #[error("failed to process c2s msg")]
-    C2SMsgProcessError,
-    #[error("failed to process s2c msg")]
-    S2CMsgProcessError,
+pub enum ManagerError {
+    #[error("fatal application bug: communication channel dropped")]
+    FatalChannelError,
+    #[error("Can't find channel with id: {0}")]
+    ChannelIdNotFound(ConnectionId),
+    #[error("IO Error {0}")]
+    IoError(#[from] tokio::io::Error),
 }
 
-impl<A, H, C2S: Send + 'static + Sync, S2C: Send + 'static + Sync> ConnectionManager<A, H, C2S, S2C>
+type ManagerResult<T> = Result<T, ManagerError>;
+enum ToManagerMessage {
+    CloseConnection(ConnectionId, OneshotSender<ManagerResult<()>>),
+    GetRemoteAddr(ConnectionId, OneshotSender<ManagerResult<SocketAddr>>),
+    AcceptNewConnection(OneshotSender<ManagerResult<StreamRecord>>),
+}
+
+pub struct ClientConnectionContext<C2S, S2C> {
+    to_server_sender: Sender<C2S>,
+    from_server_receiver: Receiver<S2C>,
+    connection_id: ConnectionId,
+    to_manager_sender: Sender<ToManagerMessage>,
+}
+
+struct ServerManagedConnection<C2S, S2C> {
+    connection_id: ConnectionId,
+    to_client_sender: Sender<S2C>,
+    from_client_receiver: Receiver<C2S>,
+}
+pub struct ServerConnectionContext<C2S, S2C> {
+    all_connections: HashMap<ConnectionId, ServerManagedConnection<C2S, S2C>>,
+    to_manager_sender: Sender<ToManagerMessage>,
+}
+
+async fn send_to_manager_and_wait_for_reply<T>(
+    msg: ToManagerMessage,
+    sender: &Sender<ToManagerMessage>,
+    rx: oneshot::Receiver<ManagerResult<T>>,
+) -> ManagerResult<T> {
+    if sender.send(msg).await.is_err() {
+        return Err(ManagerError::FatalChannelError);
+    };
+    rx.await.map_err(|_| ManagerError::FatalChannelError)?
+}
+
+// common methods for both contexts
+async fn get_remote_addr(
+    connection_id: ConnectionId,
+    sender: &Sender<ToManagerMessage>,
+) -> ManagerResult<SocketAddr> {
+    let (tx, rx) = oneshot::channel();
+    let get_remote_addr_req = GetRemoteAddr(connection_id, tx);
+    send_to_manager_and_wait_for_reply(get_remote_addr_req, sender, rx).await
+}
+
+impl<C2S, S2C> ClientConnectionContext<C2S, S2C> {
+    pub async fn get_remote_addr(&mut self) -> ManagerResult<SocketAddr> {
+        get_remote_addr(self.connection_id, &self.to_manager_sender).await
+    }
+}
+
+pub struct ConnectionManager<I, A>
 where
+    I: IoHandler + Send + Sync + 'static,
     A: StreamAcceptor,
-    H: StreamHandler + Send + Sync + 'static,
 {
-    // todo: wrap sender to make it easier to send to this manger from user struct
-    fn new(
-        acceptor: Option<A>,
-        handler: H,
-    ) -> (Self, Sender<S2CMessage<S2C>>, Receiver<C2SMessage<C2S>>) {
-        let (sender_s2c, receiver_s2c) = channel::<S2CMessage<S2C>>(128);
-        let (sender_c2s, receiver_c2s) = channel::<C2SMessage<C2S>>(128);
+    handler: Arc<I>,
+    conn_id_counter: ConnectionId,
+    streams: HashMap<ConnectionId, StreamRecord>,
+    sender: Sender<ToManagerMessage>,
+    receiver: Receiver<ToManagerMessage>,
+    _stream_acceptor: PhantomData<A>,
+}
+
+impl<I, A> ConnectionManager<I, A>
+where
+    I: IoHandler + Send + Sync + 'static,
+    A: StreamAcceptor,
+{
+    fn new<C2S, S2C>(io_handler: I) -> (Self, ServerConnectionContext<C2S, S2C>) {
+        let (to_manager_tx, to_manager_rx) = channel::<ToManagerMessage>(128);
+        let server_context = ServerConnectionContext {
+            all_connections: HashMap::new(),
+            to_manager_sender: to_manager_tx.clone(),
+        };
 
         let manager = Self {
-            acceptor,
-            handler: Arc::new(handler),
+            handler: Arc::new(io_handler),
             conn_id_counter: 0,
-            conn_flow_controller: FairFlowController::new(),
             streams: HashMap::new(),
-            to_server_sender: sender_c2s,
-            from_server_receiver: receiver_s2c,
+            sender: to_manager_tx,
+            receiver: to_manager_rx,
+            _stream_acceptor: PhantomData,
         };
-        (manager, sender_s2c, receiver_c2s)
+        (manager, server_context)
+    }
+
+    pub async fn add_connections_from_acceptor(mut acceptor: A) {
+        loop {
+            let (s, addr) = match acceptor.accept_stream().await {
+                Ok((s, addr)) => (s, addr),
+                Err(err) => {
+                    warn!("failed to accept connection");
+                    continue;
+                }
+            };
+        }
     }
 
     pub async fn run_event_loop(&mut self) {
         loop {
-            let err = match self.process_event_once().await {
-                Ok(_) => continue,
-                Err(err) => err,
-            };
-
-            match err {
-                EventError::SendC2SMsgFailed => {
-                    error!("fatal error: server dead");
+            match self.receiver.recv().await {
+                None => {
                     self.clean().await;
                     break;
                 }
-                EventError::AcceptNewSocketErr(err) => {
-                    warn!("failed to accept new socket: {err}");
-                }
-                other => {
-                    warn!("other event error: {other}");
+                Some(msg) => {
+                    self.process_manager_msg(&msg).await;
                 }
             }
         }
@@ -196,90 +212,15 @@ where
 
     async fn clean(&mut self) {}
 
-    async fn process_event_once(&mut self) -> Result<(), EventError> {
-        let accept_fut = async {
-            match &mut self.acceptor {
-                Some(acceptor) => Some(acceptor.accept_stream().await),
-                None => std::future::pending().await,
-            }
-        };
-
-        select! {
-            msg = self.conn_flow_controller.get_next_msg(), if self.conn_flow_controller.is_msg_possible() => {
-               if let Some((id, msg)) = msg {
-                    self.process_c2s_from_connections(id, msg).await?;
-               }
-            },
-
-            accept_res = accept_fut => {
-                if let Some(accept_res) = accept_res {
-                    match accept_res {
-                        Ok((s, addr)) => {
-                            self.handle_new_connection(s, addr).await;
-                        },
-                        Err(err) => {
-                            return Err(EventError::AcceptNewSocketErr(err))
-                        }
-                    }
-                }
-            },
-
-            s2c_msg = self.from_server_receiver.recv() => {
-                let s2c_msg = match s2c_msg {
-                    None => return Err(EventError::RecvS2CMsgFailed),
-                    Some(msg) => msg
-                };
-                self.process_s2c_msg(s2c_msg).await?;
-            }
-        }
-        Ok(())
-    }
-
-    async fn process_c2s_from_connections(
-        &mut self,
-        id: ConnectionId,
-        msg: C2SMessage<C2S>,
-    ) -> Result<(), EventError> {
-        self.to_server_sender
-            .send(msg)
-            .await
-            .map_err(|_| EventError::SendC2SMsgFailed)
-    }
-
-    async fn process_s2c_msg(&mut self, msg: S2CMessage<S2C>) -> Result<(), EventError> {
-        Ok(())
+    async fn process_manager_msg(&mut self, msg: &ToManagerMessage) {
+        panic!("todo");
     }
 
     async fn handle_new_connection(&mut self, s: A::Stream, addr: SocketAddr) {
-        let (sender_c2s, receiver_c2s, receiver_s2c, record) = self.create_new_stream_record(addr);
-        self.conn_flow_controller
-            .add_connection(record.id, receiver_c2s);
-        self.streams.insert(record.id, record);
-        let clone = self.handler.clone();
-        tokio::spawn(async move {
-            let _ = clone.handle_stream(s, sender_c2s, receiver_s2c).await;
-        });
+        panic!("todo")
     }
 
-    fn create_new_stream_record(
-        &mut self,
-        remote_addr: SocketAddr,
-    ) -> (
-        Sender<C2SMessage<C2S>>,
-        Receiver<C2SMessage<C2S>>,
-        Receiver<S2CMessage<S2C>>,
-        ManagedStreamRecord<S2CMessage<S2C>>,
-    ) {
-        let (sender_c2s, receiver_c2s) = channel::<C2SMessage<C2S>>(32);
-        let (sender_s2c, receiver_s2c) = channel::<S2CMessage<S2C>>(32);
-
-        let record = ManagedStreamRecord {
-            id: self.conn_id_counter,
-            remote_addr,
-            to_connection_sender: sender_s2c,
-        };
-        self.conn_id_counter += 1;
-
-        (sender_c2s, receiver_c2s, receiver_s2c, record)
+    fn create_new_stream_record(&mut self, remote_addr: SocketAddr) -> () {
+        panic!("todo")
     }
 }
