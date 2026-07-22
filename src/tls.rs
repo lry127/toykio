@@ -48,8 +48,8 @@ pub fn build_client_tls_config(
 
 #[derive(Clone)]
 pub struct ServerTlsStreamHandler<T: StreamHandler> {
-    accept_max_time: Arc<Duration>,
-    tls_acceptor: Arc<TlsAcceptor>,
+    accept_max_time: Duration,
+    tls_acceptor: TlsAcceptor,
     inner_handler: T,
 }
 
@@ -59,7 +59,7 @@ impl<U: StreamHandler + Sync> StreamHandler for ServerTlsStreamHandler<U> {
         stream: T,
         addr: SocketAddr,
     ) -> anyhow::Result<()> {
-        let stream = timeout(*self.accept_max_time, self.tls_acceptor.accept(stream))
+        let stream = timeout(self.accept_max_time, self.tls_acceptor.accept(stream))
             .await
             .context("tls handshake timeout")?
             .context("tls handshake failed")?;
@@ -75,8 +75,8 @@ impl<T: StreamHandler> ServerTlsStreamHandler<T> {
     ) -> Self {
         let tls_acceptor = TlsAcceptor::from(server_config);
         Self {
-            accept_max_time: Arc::new(handshake_timeout),
-            tls_acceptor: Arc::new(tls_acceptor),
+            accept_max_time: handshake_timeout,
+            tls_acceptor,
             inner_handler,
         }
     }
