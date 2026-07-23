@@ -350,3 +350,159 @@ mod tests {
         assert!(result.is_err());
     }
 }
+
+#[cfg(test)]
+mod h2_proxy_tests {
+    use super::*;
+    use bytes::Bytes;
+    use h2::client;
+    use http::{Method, Request};
+    use std::sync::Arc;
+    use tokio::io::duplex;
+
+    /// Helper function to establish an in-memory HTTP/2 connection
+    async fn setup_h2_duplex() -> (
+        client::SendRequest<Bytes>,
+        h2::server::Connection<tokio::io::DuplexStream, Bytes>,
+    ) {
+        // Create an in-memory duplex stream (Client IO <-> Server IO)
+        let (client_io, server_io) = duplex(8192);
+
+        // Initialize the client side
+        let (client, client_conn) = client::handshake(client_io).await.unwrap();
+        tokio::spawn(async move {
+            client_conn.await.unwrap();
+        });
+
+        // Initialize the server side
+        let server_conn = h2::server::handshake(server_io).await.unwrap();
+
+        (client, server_conn)
+    }
+
+    #[tokio::test]
+    async fn test_h2_stream_handler_invalid_method() {
+        let (mut client, mut server_conn) = setup_h2_duplex().await;
+
+        // Send a POST request (Proxy expects GET)
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("https://example.com/")
+            .body(())
+            .unwrap();
+
+        let (response_future, _send_stream) = client.send_request(req, true).unwrap();
+
+        // Accept the stream on the server side
+        let (server_req, server_resp) = server_conn.accept().await.unwrap().unwrap();
+
+        let proxy_manager = Arc::new(ProxyManager::default());
+        let handler = H2StreamHandler {
+            req: server_req,
+            resp: server_resp,
+        };
+
+        // Run the handler
+        let res = handler.run_proxy(proxy_manager).await;
+
+        // Verify the proxy rejects the request internally
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().to_string(), "invalid req method");
+
+        // Verify the client received the correct HTTP status code (405 Method Not Allowed)
+        let response = response_future.await.unwrap();
+        assert_eq!(response.status(), 405);
+    }
+
+    #[tokio::test]
+    async fn test_h2_stream_handler_missing_target() {
+        let (mut client, mut server_conn) = setup_h2_duplex().await;
+
+        // Send a GET request but omit the "target" header
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("https://example.com/")
+            .body(())
+            .unwrap();
+
+        let (response_future, _send_stream) = client.send_request(req, true).unwrap();
+
+        let (server_req, server_resp) = server_conn.accept().await.unwrap().unwrap();
+
+        let proxy_manager = Arc::new(ProxyManager::default());
+        let handler = H2StreamHandler {
+            req: server_req,
+            resp: server_resp,
+        };
+
+        let res = handler.run_proxy(proxy_manager).await;
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().to_string(), "no target found");
+
+        // Verify client gets 400 Bad Request
+        let response = response_future.await.unwrap();
+        assert_eq!(response.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn test_h2_stream_handler_invalid_target_format() {
+        let (mut client, mut server_conn) = setup_h2_duplex().await;
+
+        // Send a GET request with an incorrectly formatted target (missing colon)
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("https://example.com/")
+            .header("target", "invalid_target_without_port")
+            .body(())
+            .unwrap();
+
+        let (response_future, _send_stream) = client.send_request(req, true).unwrap();
+
+        let (server_req, server_resp) = server_conn.accept().await.unwrap().unwrap();
+
+        let proxy_manager = Arc::new(ProxyManager::default());
+        let handler = H2StreamHandler {
+            req: server_req,
+            resp: server_resp,
+        };
+
+        let res = handler.run_proxy(proxy_manager).await;
+        assert!(res.is_err());
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "invalid target, ':' separated target hostname expected"
+        );
+
+        let response = response_future.await.unwrap();
+        assert_eq!(response.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn test_h2_multiplexer_clean_shutdown() {
+        let (client_io, server_io) = duplex(8192);
+
+        // Only start the client side connection; don't make any requests
+        let (client, client_conn) = client::handshake(client_io).await.unwrap();
+        tokio::spawn(async move {
+            client_conn.await.unwrap();
+        });
+
+        // Initialize the Multiplexer
+        let multiplexer = H2ProxyConnectionsMultiplexer {
+            h2_connection: h2::server::handshake(server_io).await.unwrap(),
+            proxy_manager: Arc::new(ProxyManager::default()),
+        };
+
+        // Run multiplexer on a separate task
+        let multiplexer_task = tokio::spawn(async move { multiplexer.accept_connections().await });
+
+        // Simulate the client disconnecting by dropping the client handle
+        drop(client);
+
+        // Wait for the multiplexer task to resolve
+        let result = multiplexer_task.await.unwrap();
+
+        // Assert that the multiplexer cleanly exited its loop returning Ok(())
+        assert!(result.is_ok());
+    }
+}
