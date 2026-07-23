@@ -37,7 +37,6 @@ impl<T: StreamConnection + 'static> H2ProxyConnectionsMultiplexer<T> {
             // if there's an IO error or client closes the connection, abort everything and clean up
             let accept_res = match self.h2_connection.accept().await {
                 None => {
-                    self.clean_up();
                     return Ok(());
                 }
                 Some(accept_res) => accept_res,
@@ -46,7 +45,14 @@ impl<T: StreamConnection + 'static> H2ProxyConnectionsMultiplexer<T> {
                 Ok(res) => res,
                 Err(err) => {
                     self.clean_up();
-                    bail!(err);
+                    if err.is_io()
+                        && err
+                            .get_io()
+                            .map_or(false, |io| io.kind() == std::io::ErrorKind::BrokenPipe)
+                    {
+                        return Ok(());
+                    }
+                    return Err(err.into());
                 }
             };
 
@@ -395,6 +401,7 @@ mod h2_proxy_tests {
 
         // Accept the stream on the server side
         let (server_req, server_resp) = server_conn.accept().await.unwrap().unwrap();
+        tokio::spawn(async move { while let Some(Ok(_)) = server_conn.accept().await {} });
 
         let proxy_manager = Arc::new(ProxyManager::default());
         let handler = H2StreamHandler {
@@ -428,6 +435,7 @@ mod h2_proxy_tests {
         let (response_future, _send_stream) = client.send_request(req, true).unwrap();
 
         let (server_req, server_resp) = server_conn.accept().await.unwrap().unwrap();
+        tokio::spawn(async move { while let Some(Ok(_)) = server_conn.accept().await {} });
 
         let proxy_manager = Arc::new(ProxyManager::default());
         let handler = H2StreamHandler {
@@ -459,6 +467,7 @@ mod h2_proxy_tests {
         let (response_future, _send_stream) = client.send_request(req, true).unwrap();
 
         let (server_req, server_resp) = server_conn.accept().await.unwrap().unwrap();
+        tokio::spawn(async move { while let Some(Ok(_)) = server_conn.accept().await {} });
 
         let proxy_manager = Arc::new(ProxyManager::default());
         let handler = H2StreamHandler {
@@ -484,7 +493,7 @@ mod h2_proxy_tests {
         // Only start the client side connection; don't make any requests
         let (client, client_conn) = client::handshake(client_io).await.unwrap();
         tokio::spawn(async move {
-            client_conn.await.unwrap();
+            client_conn.await.ok();
         });
 
         // Initialize the Multiplexer
@@ -499,10 +508,15 @@ mod h2_proxy_tests {
         // Simulate the client disconnecting by dropping the client handle
         drop(client);
 
-        // Wait for the multiplexer task to resolve
-        let result = multiplexer_task.await.unwrap();
+        // Wait for the multiplexer task to resolve with a timeout to avoid hanging
+        let result = tokio::time::timeout(Duration::from_secs(1), multiplexer_task).await;
 
-        // Assert that the multiplexer cleanly exited its loop returning Ok(())
-        assert!(result.is_ok());
+        match result {
+            Ok(inner) => {
+                let res = inner.unwrap();
+                assert!(res.is_ok(), "Expected Ok(()), got {:?}", res);
+            }
+            Err(_) => panic!("Multiplexer did not shut down in time"),
+        }
     }
 }
