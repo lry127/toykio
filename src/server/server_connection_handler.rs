@@ -45,13 +45,6 @@ impl<T: StreamConnection + 'static> H2ProxyConnectionsMultiplexer<T> {
                 Ok(res) => res,
                 Err(err) => {
                     self.clean_up();
-                    if err.is_io()
-                        && err
-                            .get_io()
-                            .map_or(false, |io| io.kind() == std::io::ErrorKind::BrokenPipe)
-                    {
-                        return Ok(());
-                    }
                     return Err(err.into());
                 }
             };
@@ -607,39 +600,5 @@ mod h2_proxy_tests {
 
         let response = response_future.await.unwrap();
         assert_eq!(response.status(), 400);
-    }
-
-    #[tokio::test]
-    async fn test_h2_multiplexer_clean_shutdown() {
-        let (client_io, server_io) = duplex(8192);
-
-        // Only start the client side connection; don't make any requests
-        let (client, client_conn) = client::handshake(client_io).await.unwrap();
-        tokio::spawn(async move {
-            client_conn.await.ok();
-        });
-
-        // Initialize the Multiplexer
-        let multiplexer = H2ProxyConnectionsMultiplexer {
-            h2_connection: h2::server::handshake(server_io).await.unwrap(),
-            proxy_manager: Arc::new(ProxyManager::default()),
-        };
-
-        // Run multiplexer on a separate task
-        let multiplexer_task = tokio::spawn(async move { multiplexer.accept_connections().await });
-
-        // Simulate the client disconnecting by dropping the client handle
-        drop(client);
-
-        // Wait for the multiplexer task to resolve with a timeout to avoid hanging
-        let result = tokio::time::timeout(Duration::from_secs(1), multiplexer_task).await;
-
-        match result {
-            Ok(inner) => {
-                let res = inner.unwrap();
-                assert!(res.is_ok(), "Expected Ok(()), got {:?}", res);
-            }
-            Err(_) => panic!("Multiplexer did not shut down in time"),
-        }
     }
 }
