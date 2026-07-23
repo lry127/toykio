@@ -153,7 +153,8 @@ impl DataWriter for SendStream<Bytes> {
     }
 
     async fn shutdown(&mut self) -> Result<(), DataEndpointError> {
-        self.send_reset(Reason::CANCEL);
+        self.send_data(Bytes::new(), true)
+            .map_err(|e| DataEndpointError::from(e))?;
         Ok(())
     }
 }
@@ -364,7 +365,8 @@ mod h2_proxy_tests {
     use h2::client;
     use http::{Method, Request};
     use std::sync::Arc;
-    use tokio::io::duplex;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
+    use tokio::net::TcpListener;
 
     /// Helper function to establish an in-memory HTTP/2 connection
     async fn setup_h2_duplex() -> (
@@ -384,6 +386,127 @@ mod h2_proxy_tests {
         let server_conn = h2::server::handshake(server_io).await.unwrap();
 
         (client, server_conn)
+    }
+
+    #[tokio::test]
+    async fn test_h2_proxy_bidirectional_data() {
+        // 1. Setup mock TCP target
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_addr = listener.local_addr().unwrap();
+
+        let target_task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 12];
+            stream.read_exact(&mut buf).await.unwrap();
+            assert_eq!(&buf, b"hello target");
+            stream.write_all(b"hello client").await.unwrap();
+        });
+
+        // 2. Setup H2 duplex
+        let (mut client, mut server_conn) = setup_h2_duplex().await;
+
+        // 3. Client sends request
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("https://example.com/")
+            .header("target", target_addr.to_string())
+            .body(())
+            .unwrap();
+
+        let (response_future, mut client_send_stream) = client.send_request(req, false).unwrap();
+
+        // 4. Server accepts stream and runs proxy
+        let (server_req, server_resp) = server_conn.accept().await.unwrap().unwrap();
+        tokio::spawn(async move { while let Some(Ok(_)) = server_conn.accept().await {} });
+
+        let proxy_manager = Arc::new(ProxyManager::default());
+        let handler = H2StreamHandler {
+            req: server_req,
+            resp: server_resp,
+        };
+
+        tokio::spawn(async move {
+            handler.run_proxy(proxy_manager).await.unwrap();
+        });
+
+        // 5. Verify response and data transmission
+        let response = response_future.await.unwrap();
+        assert_eq!(response.status(), 200);
+        let mut client_recv_stream = response.into_body();
+
+        // Send data from client to target
+        client_send_stream
+            .send_data(Bytes::from("hello target"), true)
+            .unwrap();
+
+        // Read data from target to client
+        let data = client_recv_stream.read_data().await.unwrap().unwrap();
+        assert_eq!(data, Bytes::from("hello client"));
+
+        target_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_h2_proxy_concurrent_requests() {
+        // 1. Setup mock TCP target that handles multiple connections
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 5];
+                    if stream.read_exact(&mut buf).await.is_ok() {
+                        let msg = format!("echo: {}", String::from_utf8_lossy(&buf));
+                        stream.write_all(msg.as_bytes()).await.unwrap();
+                    }
+                });
+            }
+        });
+
+        // 2. Setup H2 duplex and Multiplexer
+        let (client_io, server_io) = duplex(8192);
+        let (client, client_conn) = client::handshake(client_io).await.unwrap();
+        tokio::spawn(async move {
+            client_conn.await.unwrap();
+        });
+
+        let multiplexer = H2ProxyConnectionsMultiplexer {
+            h2_connection: h2::server::handshake(server_io).await.unwrap(),
+            proxy_manager: Arc::new(ProxyManager::default()),
+        };
+        tokio::spawn(async move { multiplexer.accept_connections().await });
+
+        // 3. Send multiple concurrent requests
+        let mut futures = Vec::new();
+        for i in 0..5 {
+            let mut client = client.clone();
+            let target_addr_str = target_addr.to_string();
+            futures.push(tokio::spawn(async move {
+                let req = Request::builder()
+                    .method(Method::GET)
+                    .uri("https://example.com/")
+                    .header("target", target_addr_str)
+                    .body(())
+                    .unwrap();
+
+                let (response_future, mut send_stream) = client.send_request(req, false).unwrap();
+                let payload = format!("req{:02}", i);
+                send_stream
+                    .send_data(Bytes::from(payload.clone()), true)
+                    .unwrap();
+
+                let response = response_future.await.unwrap();
+                assert_eq!(response.status(), 200);
+                let mut recv_stream = response.into_body();
+                let data = recv_stream.read_data().await.unwrap().unwrap();
+                assert_eq!(data, Bytes::from(format!("echo: {}", payload)));
+            }));
+        }
+
+        for f in futures {
+            f.await.unwrap();
+        }
     }
 
     #[tokio::test]
