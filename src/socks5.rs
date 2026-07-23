@@ -157,7 +157,6 @@ pub async fn handle_target_addr_negotiation<T: AsyncRead + AsyncWrite + Unpin>(
 pub enum ConnectionServerReplyCode {
     Success = 0x0,
     GeneralFailure = 0x1,
-    ConnectionRefused = 0x5,
     CmdNotSupported = 0x7,
     AddrTypeNotSupported = 0x8,
 }
