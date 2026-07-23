@@ -3,6 +3,7 @@ use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpStream, ToSocketAddrs};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, instrument, warn};
@@ -72,17 +73,16 @@ impl<T: AsyncWrite + Unpin + Send> DataWriter for StreamWriter<T> {
     }
 }
 
-struct StreamDataEndpoint<T> {
-    stream: T,
+struct TcpStreamDataEndpoint {
+    stream: TcpStream,
     read_buf_len: usize,
 }
-
-impl<T: AsyncRead + AsyncWrite + Send + Unpin + 'static> DataEndpoint for StreamDataEndpoint<T> {
-    type ReadHalf = StreamReader<ReadHalf<T>>;
-    type WriteHalf = StreamWriter<WriteHalf<T>>;
+impl DataEndpoint for TcpStreamDataEndpoint {
+    type ReadHalf = StreamReader<OwnedReadHalf>;
+    type WriteHalf = StreamWriter<OwnedWriteHalf>;
 
     fn split(self) -> (Self::ReadHalf, Self::WriteHalf) {
-        let (read_half, write_half) = tokio::io::split(self.stream);
+        let (read_half, write_half) = self.stream.into_split();
         let reader = StreamReader {
             stream: read_half,
             buf: BytesMut::with_capacity(self.read_buf_len),
@@ -208,7 +208,7 @@ impl ProxyManager {
         remote: T,
     ) -> tokio::io::Result<impl DataEndpoint> {
         let tcp_stream = TcpStream::connect(remote).await?;
-        let stream_endpoint = StreamDataEndpoint {
+        let stream_endpoint = TcpStreamDataEndpoint {
             stream: tcp_stream,
             read_buf_len: self.read_chunk_size,
         };
@@ -245,6 +245,27 @@ mod tests {
     use std::task::{Context, Poll};
     use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
     use tokio_test::io::Builder;
+
+    struct StreamDataEndpoint<T> {
+        stream: T,
+        read_buf_len: usize,
+    }
+
+    impl<T: AsyncRead + AsyncWrite + Send + Unpin + 'static> DataEndpoint for StreamDataEndpoint<T> {
+        type ReadHalf = StreamReader<ReadHalf<T>>;
+        type WriteHalf = StreamWriter<WriteHalf<T>>;
+
+        fn split(self) -> (Self::ReadHalf, Self::WriteHalf) {
+            let (read_half, write_half) = tokio::io::split(self.stream);
+            let reader = StreamReader {
+                stream: read_half,
+                buf: BytesMut::with_capacity(self.read_buf_len),
+                buf_size: self.read_buf_len,
+            };
+            let writer = StreamWriter { stream: write_half };
+            (reader, writer)
+        }
+    }
 
     /// Helper to quickly wrap any stream into a StreamDataEndpoint
     fn make_endpoint<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
