@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::config::SecurityConfig;
-use clap::Args;
+use clap::{Args, Parser, ValueEnum};
 
 #[derive(Args, Debug, Clone)]
 pub struct SecurityConfigArgs {
@@ -16,6 +16,27 @@ pub struct SecurityConfigArgs {
 
     #[arg(long)]
     shared_secret: String,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy)]
+pub enum Protocol {
+    Tcp,
+    Kcp,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct ServerConfigArgs {
+    #[command(flatten)]
+    pub security_config_args: SecurityConfigArgs,
+
+    #[arg(long, default_value = "tcp")]
+    pub protocol: Protocol,
+
+    #[arg(long)]
+    pub listen_addr: String,
+
+    #[arg(long)]
+    pub kcp_mtu: Option<u32>,
 }
 
 pub fn get_security_config_from_cli(args: &SecurityConfigArgs) -> anyhow::Result<SecurityConfig> {

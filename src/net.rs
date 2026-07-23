@@ -1,4 +1,4 @@
-use kcp_tokio::{KcpConfig, KcpListener, KcpStream, UdpTransport};
+pub use kcp_tokio::{KcpConfig, KcpListener, KcpStream, UdpTransport};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};

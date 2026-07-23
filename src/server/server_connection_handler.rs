@@ -88,10 +88,6 @@ struct H2StreamEndpoint {
     recv_from_client: RecvStream,
 }
 
-struct H2StreamReader {
-    send_stream: SendStream<Bytes>,
-}
-
 impl DataReader for RecvStream {
     async fn read_data(&mut self) -> Result<Option<Bytes>, DataEndpointError> {
         let res = match poll_fn(|cx| self.poll_data(cx)).await {
@@ -129,7 +125,7 @@ impl DataWriter for SendStream<Bytes> {
                         "HTTP/2 stream closed",
                     ))
                 })?
-                .map_err(|e| DataEndpointError::from(e))?; // Handle the inner Result error
+                .map_err(DataEndpointError::from)?; // Handle the inner Result error
 
             // 3. Determine how much data we are allowed to send right now.
             let chunk_size = std::cmp::min(data.len(), available_capacity);
@@ -139,7 +135,7 @@ impl DataWriter for SendStream<Bytes> {
 
             // 5. Immediately consume the assigned capacity by sending the chunk.
             self.send_data(chunk, false)
-                .map_err(|e| DataEndpointError::from(e))?;
+                .map_err(DataEndpointError::from)?;
         }
 
         Ok(())
@@ -147,7 +143,7 @@ impl DataWriter for SendStream<Bytes> {
 
     async fn shutdown(&mut self) -> Result<(), DataEndpointError> {
         self.send_data(Bytes::new(), true)
-            .map_err(|e| DataEndpointError::from(e))?;
+            .map_err(DataEndpointError::from)?;
         Ok(())
     }
 }
@@ -215,7 +211,7 @@ impl H2StreamHandler {
     }
 }
 
-struct ServerConnectionHandler {
+pub struct ServerConnectionHandler {
     auth_secret: HashedAuthSecret,
 }
 
@@ -247,6 +243,10 @@ impl StreamHandler for ServerConnectionHandler {
 }
 
 impl ServerConnectionHandler {
+    pub fn new(auth_secret: HashedAuthSecret) -> Self {
+        Self { auth_secret }
+    }
+
     async fn authenticate_client<T: StreamConnection + 'static>(
         &self,
         stream: &mut T,
@@ -364,7 +364,7 @@ mod h2_proxy_tests {
     /// Helper function to establish an in-memory HTTP/2 connection
     async fn setup_h2_duplex() -> (
         client::SendRequest<Bytes>,
-        h2::server::Connection<tokio::io::DuplexStream, Bytes>,
+        Connection<tokio::io::DuplexStream, Bytes>,
     ) {
         // Create an in-memory duplex stream (Client IO <-> Server IO)
         let (client_io, server_io) = duplex(8192);

@@ -2,7 +2,7 @@ use bytes::{Bytes, BytesMut};
 use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpStream, ToSocketAddrs};
 use tokio_util::sync::CancellationToken;
@@ -185,6 +185,7 @@ enum StreamDirection {
     B,
 }
 #[derive(Debug)]
+#[allow(unused)] // it's used implicitly in tracing crate
 struct ProxyTaskIdentifier {
     proxy_id: ProxyId,
     direction: StreamDirection,
@@ -246,7 +247,9 @@ mod tests {
     use super::*;
     use std::pin::Pin;
     use std::task::{Context, Poll};
-    use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
+    use tokio::io::{
+        AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf, ReadHalf, WriteHalf,
+    };
     use tokio_test::io::Builder;
 
     struct StreamDataEndpoint<T> {
@@ -395,7 +398,7 @@ mod tests {
         // Trigger the global cancellation token, cascading to all active sessions
         manager.shutdown_manager();
 
-        // Both endpoints should have their write_halves cleanly shut down by the cancelled tasks
+        // Both endpoints should have their write_halves cleanly shut down by the canceled tasks
         let mut buf = vec![0; 10];
 
         let n_a = client_a.read(&mut buf).await.unwrap();
