@@ -1,5 +1,6 @@
 use bytes::{Bytes, BytesMut};
 use std::future::Future;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::{TcpStream, ToSocketAddrs};
@@ -36,10 +37,12 @@ pub trait DataWriter {
 struct StreamReader<T> {
     stream: T,
     buf: BytesMut,
+    buf_size: usize,
 }
 
 impl<T: AsyncRead + Unpin + Send> DataReader for StreamReader<T> {
     async fn read_data(&mut self) -> Result<Option<Bytes>, DataEndpointError> {
+        self.buf.reserve(self.buf_size);
         match self.stream.read_buf(&mut self.buf).await {
             Ok(n) => {
                 if n == 0 {
@@ -83,6 +86,7 @@ impl<T: AsyncRead + AsyncWrite + Send + Unpin + 'static> DataEndpoint for Stream
         let reader = StreamReader {
             stream: read_half,
             buf: BytesMut::with_capacity(self.read_buf_len),
+            buf_size: self.read_buf_len,
         };
         let writer = StreamWriter { stream: write_half };
         (reader, writer)
@@ -103,7 +107,7 @@ where
     A: DataEndpoint,
     B: DataEndpoint,
 {
-    fn spawn_copy_tasks(self, cancellation_token: CancellationToken) {
+    fn spawn_copy_tasks(self, proxy_id: ProxyId, cancellation_token: CancellationToken) {
         let (rx_a, tx_a) = self.endpoint_a.split();
         let (rx_b, tx_b) = self.endpoint_b.split();
 
@@ -111,17 +115,27 @@ where
         let token_a = cancellation_token;
         let token_b = token_a.clone();
 
+        let a_id = ProxyTaskIdentifier {
+            proxy_id,
+            direction: StreamDirection::A,
+        };
+        let b_id = ProxyTaskIdentifier {
+            proxy_id,
+            direction: StreamDirection::B,
+        };
+
         tokio::spawn(async move {
-            Self::run_copy(rx_a, tx_b, token_a).await;
+            Self::run_copy(a_id, rx_a, tx_b, token_a).await;
         });
 
         tokio::spawn(async move {
-            Self::run_copy(rx_b, tx_a, token_b).await;
+            Self::run_copy(b_id, rx_b, tx_a, token_b).await;
         });
     }
 
     #[instrument(skip(read_half, write_half, token))]
     async fn run_copy<T: DataReader, U: DataWriter>(
+        _proxy_task_identifier: ProxyTaskIdentifier,
         mut read_half: T,
         mut write_half: U,
         token: CancellationToken,
@@ -161,10 +175,23 @@ where
     }
 }
 
+type ProxyId = usize;
+#[derive(Debug)]
+enum StreamDirection {
+    A,
+    B,
+}
+#[derive(Debug)]
+struct ProxyTaskIdentifier {
+    proxy_id: ProxyId,
+    direction: StreamDirection,
+}
+
 /// Manages a group of proxy connections
 pub struct ProxyManager {
     root_cancellation_token: CancellationToken,
     read_chunk_size: usize,
+    proxy_id_counter: AtomicUsize,
 }
 
 impl ProxyManager {
@@ -172,11 +199,8 @@ impl ProxyManager {
         Self {
             root_cancellation_token: CancellationToken::new(),
             read_chunk_size,
+            proxy_id_counter: AtomicUsize::new(0),
         }
-    }
-
-    pub fn default() -> Self {
-        Self::new(8192)
     }
 
     pub async fn tcp_connect_to_target<T: ToSocketAddrs>(
@@ -192,17 +216,25 @@ impl ProxyManager {
     }
 
     pub fn start_session<A: DataEndpoint, B: DataEndpoint>(&self, endpoint_a: A, endpoint_b: B) {
+        let proxy_id = self.proxy_id_counter.fetch_add(1, Ordering::Relaxed);
+
         let token = self.root_cancellation_token.child_token();
 
         let copier = BidirectionalCopier {
-            endpoint_a: endpoint_a,
-            endpoint_b: endpoint_b,
+            endpoint_a,
+            endpoint_b,
         };
 
-        copier.spawn_copy_tasks(token);
+        copier.spawn_copy_tasks(proxy_id, token);
     }
 
     pub fn shutdown_manager(&self) {
         self.root_cancellation_token.cancel();
+    }
+}
+
+impl Default for ProxyManager {
+    fn default() -> Self {
+        Self::new(8192)
     }
 }
