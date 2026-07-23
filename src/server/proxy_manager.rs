@@ -11,7 +11,10 @@ use tracing::{debug, instrument, warn};
 #[derive(Error, Debug)]
 pub enum DataEndpointError {
     #[error("io failed due to underlying transport error {0}")]
-    IoError(#[from] tokio::io::Error),
+    IoError(#[from] std::io::Error),
+
+    #[error("h2 protocol error {0}")]
+    H2Error(#[from] h2::Error),
 }
 
 pub trait DataEndpoint {

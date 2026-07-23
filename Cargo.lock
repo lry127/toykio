@@ -998,6 +998,7 @@ dependencies = [
  "h2",
  "http",
  "kcp-tokio",
+    "log",
  "num_enum",
  "rand",
  "rustls",

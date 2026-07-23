@@ -1,9 +1,17 @@
 use crate::config::HashedAuthSecret;
 use crate::net::{StreamConnection, StreamHandler};
+use crate::server::proxy_manager::{
+    DataEndpoint, DataEndpointError, DataReader, DataWriter, ProxyManager,
+};
 use anyhow::{Context, bail};
 use bytes::Bytes;
-use h2::server::Connection;
+use h2::server::{Connection, SendResponse};
+use h2::{Reason, RecvStream, SendStream};
+use http::{Method, Request, Response};
+use log::warn;
+use std::future::poll_fn;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 use subtle::ConstantTimeEq;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -12,13 +20,198 @@ use tracing::{debug, instrument};
 
 struct H2ProxyConnectionsMultiplexer<T> {
     h2_connection: Connection<T, Bytes>,
+    proxy_manager: Arc<ProxyManager>,
 }
 
-impl<T: StreamConnection> H2ProxyConnectionsMultiplexer<T> {
-    async fn h2_handshake(stream: T) -> anyhow::Result<Self> {
+impl<T: StreamConnection + 'static> H2ProxyConnectionsMultiplexer<T> {
+    async fn wrap_server_stream(stream: T) -> anyhow::Result<Self> {
         Ok(Self {
             h2_connection: h2::server::handshake(stream).await?,
+            proxy_manager: Arc::new(ProxyManager::default()),
         })
+    }
+
+    async fn accept_connections(mut self) -> anyhow::Result<()> {
+        loop {
+            // a h2 conn is not designed to be shutdown unless the client no longer uses it
+            // if there's an IO error or client closes the connection, abort everything and clean up
+            let accept_res = match self.h2_connection.accept().await {
+                None => {
+                    self.clean_up();
+                    return Ok(());
+                }
+                Some(accept_res) => accept_res,
+            };
+            let (req, send_response) = match accept_res {
+                Ok(res) => res,
+                Err(err) => {
+                    self.clean_up();
+                    bail!(err);
+                }
+            };
+
+            let proxy_manager = self.proxy_manager.clone();
+            tokio::spawn(async move {
+                Self::handle_new_stream(proxy_manager, req, send_response)
+                    .await
+                    .ok();
+            });
+        }
+    }
+
+    fn clean_up(&mut self) {
+        self.h2_connection.abrupt_shutdown(Reason::CANCEL);
+        self.proxy_manager.shutdown_manager();
+    }
+
+    #[instrument(skip(resp, proxy_manager))]
+    async fn handle_new_stream(
+        proxy_manager: Arc<ProxyManager>,
+        req: Request<RecvStream>,
+        resp: SendResponse<Bytes>,
+    ) -> anyhow::Result<()> {
+        let stream_handler = H2StreamHandler { req, resp };
+        match stream_handler.run_proxy(proxy_manager).await {
+            Ok(_) => {
+                debug!("stream_handler exited OK");
+            }
+            Err(err) => {
+                warn!("proxy stream handler error: {err}");
+                bail!(err);
+            }
+        };
+        Ok(())
+    }
+}
+
+struct H2StreamEndpoint {
+    send_to_client: SendStream<Bytes>,
+    recv_from_client: RecvStream,
+}
+
+struct H2StreamReader {
+    send_stream: SendStream<Bytes>,
+}
+
+impl DataReader for RecvStream {
+    async fn read_data(&mut self) -> Result<Option<Bytes>, DataEndpointError> {
+        let res = match poll_fn(|cx| self.poll_data(cx)).await {
+            None => return Ok(None),
+            Some(res) => res,
+        };
+        match res {
+            Ok(data) => {
+                let res = self.flow_control().release_capacity(data.len());
+                match res {
+                    Ok(_) => Ok(Some(data)),
+                    Err(err) => Err(DataEndpointError::IoError(std::io::Error::other(err))),
+                }
+            }
+            Err(err) => Err(DataEndpointError::IoError(std::io::Error::other(err))),
+        }
+    }
+}
+
+impl DataWriter for SendStream<Bytes> {
+    async fn write_data(&mut self, mut data: Bytes) -> Result<(), DataEndpointError> {
+        while !data.is_empty() {
+            // 1. Signal intent to send the exact remaining amount of data.
+            self.reserve_capacity(data.len());
+
+            // 2. Bridge the poll-based API into the async/await world.
+            // poll_fn provides the Context (`cx`) needed by `poll_capacity`.
+            let available_capacity = poll_fn(|cx| self.poll_capacity(cx))
+                .await
+                .ok_or_else(|| {
+                    // poll_capacity returns Option::None if the stream is closed
+                    // and will never receive capacity again.
+                    DataEndpointError::from(std::io::Error::new(
+                        std::io::ErrorKind::ConnectionAborted,
+                        "HTTP/2 stream closed",
+                    ))
+                })?
+                .map_err(|e| DataEndpointError::from(e))?; // Handle the inner Result error
+
+            // 3. Determine how much data we are allowed to send right now.
+            let chunk_size = std::cmp::min(data.len(), available_capacity);
+
+            // 4. Zero-copy split of the payload.
+            let chunk = data.split_to(chunk_size);
+
+            // 5. Immediately consume the assigned capacity by sending the chunk.
+            self.send_data(chunk, false)
+                .map_err(|e| DataEndpointError::from(e))?;
+        }
+
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> Result<(), DataEndpointError> {
+        self.send_reset(Reason::CANCEL);
+        Ok(())
+    }
+}
+
+impl DataEndpoint for H2StreamEndpoint {
+    type ReadHalf = RecvStream;
+    type WriteHalf = SendStream<Bytes>;
+
+    fn split(self) -> (Self::ReadHalf, Self::WriteHalf) {
+        (self.recv_from_client, self.send_to_client)
+    }
+}
+
+struct H2StreamHandler {
+    req: Request<RecvStream>,
+    resp: SendResponse<Bytes>,
+}
+
+impl H2StreamHandler {
+    async fn run_proxy(mut self, proxy_manager: Arc<ProxyManager>) -> anyhow::Result<()> {
+        if self.req.method() != Method::GET {
+            self.send_error_resp(405).await.ok();
+            bail!("invalid req method");
+        }
+
+        let target = match self.req.headers().get("target") {
+            None => {
+                self.send_error_resp(400).await.ok();
+                bail!("no target found");
+            }
+            Some(target) => match target.to_str() {
+                Ok(s) if s.contains(':') => s.to_owned(),
+                _ => {
+                    self.send_error_resp(400).await.ok();
+                    bail!("invalid target, ':' separated target hostname expected");
+                }
+            },
+        };
+
+        let target_endpoint = match proxy_manager.tcp_connect_to_target(target).await {
+            Ok(ep) => ep,
+            Err(err) => {
+                self.send_error_resp(460).await.ok();
+                bail!("failed to connect to remote: {err}");
+            }
+        };
+
+        let send_to_client = self
+            .resp
+            .send_response(Response::builder().status(200).body(())?, false)
+            .context("can't send response")?;
+
+        let client_data_endpoint = H2StreamEndpoint {
+            send_to_client,
+            recv_from_client: self.req.into_body(),
+        };
+        proxy_manager.start_session(client_data_endpoint, target_endpoint);
+        Ok(())
+    }
+
+    async fn send_error_resp(&mut self, status: u16) -> anyhow::Result<()> {
+        self.resp
+            .send_response(Response::builder().status(status).body(())?, true)?;
+        Ok(())
     }
 }
 
@@ -47,6 +240,8 @@ impl StreamHandler for ServerConnectionHandler {
         .context("auth timeout")?
         .context("auth failed")?;
 
+        let h2_multiplexer = H2ProxyConnectionsMultiplexer::wrap_server_stream(stream).await?;
+        h2_multiplexer.accept_connections().await?;
         Ok(())
     }
 }
