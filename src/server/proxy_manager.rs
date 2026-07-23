@@ -135,7 +135,7 @@ where
 
     #[instrument(skip(read_half, write_half, token))]
     async fn run_copy<T: DataReader, U: DataWriter>(
-        _proxy_task_identifier: ProxyTaskIdentifier,
+        proxy_task_identifier: ProxyTaskIdentifier,
         mut read_half: T,
         mut write_half: U,
         token: CancellationToken,
