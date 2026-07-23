@@ -118,10 +118,7 @@ where
             };
             let handler = self.handler.clone();
             tokio::spawn(async move {
-                let res = handler.handle_stream(s, addr).await;
-                if let Err(err) = res {
-                    warn!("failed to handle stream ({addr}): {err}")
-                }
+                handler.handle_stream(s, addr).await.ok();
             });
         }
     }
