@@ -1,4 +1,4 @@
-mod proxy_manager;
+pub mod proxy_manager;
 pub mod server_connection_handler;
 
 use crate::config::SecurityConfig;

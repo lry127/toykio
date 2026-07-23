@@ -1,24 +1,15 @@
 use anyhow::{Context, bail};
 use clap::Parser;
-use std::net::SocketAddr;
-use std::str::FromStr;
-use toykio::cli::{SecurityConfigArgs, get_security_config_from_cli};
-use toykio::client::Socks5Processor;
+use rustls::pki_types::ServerName;
+use std::sync::Arc;
+use toykio::cli::{ClientConfigArgs, Protocol, get_security_config_from_cli};
+use toykio::client::{ClientConnectionManager, Socks5Processor};
+use toykio::net::KcpConfig;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
-
-#[derive(Parser)]
-struct ClientCli {
-    #[command(flatten)]
-    security_config_args: SecurityConfigArgs,
-    #[arg(long)]
-    socks5_addr: String,
-    #[arg(long)]
-    remote_addr: String,
-}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let cli = ClientCli::parse();
+    let cli = ClientConfigArgs::parse();
     let client_security_config = match get_security_config_from_cli(&cli.security_config_args) {
         Ok(res) => res,
         Err(err) => {
@@ -26,19 +17,15 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    if let Err(err) = SocketAddr::from_str(&cli.socks5_addr) {
-        bail!("socks5 addr {} is invalid: {}", cli.socks5_addr, err);
-    }
-
-    if let Err(err) = SocketAddr::from_str(&cli.remote_addr) {
-        bail!("remote proxy addr {} is invalid: {}", cli.remote_addr, err);
-    }
-
-    let (server_hostname, server_port) = &cli
+    let (server_hostname, _server_port) = &cli
         .remote_addr
         .split_once(':')
         .context("unable to split server addr")?;
-    let server_port = server_port.parse().context("invalid server port")?;
+
+    let remote_addr = tokio::net::lookup_host(&cli.remote_addr)
+        .await?
+        .next()
+        .context("can't resolve remote proxy addr")?;
 
     let subscriber = FmtSubscriber::builder()
         .with_env_filter(
@@ -46,13 +33,29 @@ async fn main() -> anyhow::Result<()> {
         )
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
-    let client = Socks5Processor::new(
-        cli.socks5_addr,
+
+    let server_name = ServerName::try_from(*server_hostname)?.to_owned();
+
+    let kcp_config = if matches!(cli.protocol, Protocol::Kcp) {
+        let mut config = KcpConfig::file_transfer();
+        if let Some(mtu) = cli.kcp_mtu {
+            config.mtu = mtu;
+        }
+        Some(config)
+    } else {
+        None
+    };
+
+    let connection_manager = Arc::new(ClientConnectionManager::new(
         client_security_config,
-        server_hostname,
-        server_port,
-    )
-    .await?;
+        remote_addr,
+        server_name,
+        cli.protocol,
+        kcp_config,
+    ));
+
+    let client = Socks5Processor::new(cli.socks5_addr, connection_manager).await?;
+
     client.run_socks5_loop().await;
     Ok(())
 }

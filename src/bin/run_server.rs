@@ -17,8 +17,9 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    if let Err(err) = SocketAddr::from_str(&cli.listen_addr) {
-        bail!("listening addr {} is invalid: {}", cli.listen_addr, err);
+    let listen_addr = cli.listen_addr.as_deref().unwrap_or("0.0.0.0:5928");
+    if let Err(err) = SocketAddr::from_str(listen_addr) {
+        bail!("listening addr {} is invalid: {}", listen_addr, err);
     }
 
     let subscriber = FmtSubscriber::builder()
@@ -33,14 +34,14 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.protocol {
         Protocol::Tcp => {
-            ProxyServer::run_tcp(&cli.listen_addr, server_security_config).await?;
+            ProxyServer::run_tcp(listen_addr, server_security_config).await?;
         }
         Protocol::Kcp => {
             let mut kcp_config = KcpConfig::file_transfer();
             if let Some(mtu) = cli.kcp_mtu {
                 kcp_config.mtu = mtu;
             }
-            ProxyServer::run_kcp(&cli.listen_addr, server_security_config, kcp_config).await?;
+            ProxyServer::run_kcp(listen_addr, server_security_config, kcp_config).await?;
         }
     }
     Ok(())

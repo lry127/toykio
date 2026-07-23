@@ -33,7 +33,25 @@ pub struct ServerConfigArgs {
     pub protocol: Protocol,
 
     #[arg(long)]
-    pub listen_addr: String,
+    pub listen_addr: Option<String>,
+
+    #[arg(long)]
+    pub kcp_mtu: Option<u32>,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct ClientConfigArgs {
+    #[command(flatten)]
+    pub security_config_args: SecurityConfigArgs,
+
+    #[arg(long, default_value = "tcp")]
+    pub protocol: Protocol,
+
+    #[arg(long)]
+    pub socks5_addr: String,
+
+    #[arg(long)]
+    pub remote_addr: String,
 
     #[arg(long)]
     pub kcp_mtu: Option<u32>,
