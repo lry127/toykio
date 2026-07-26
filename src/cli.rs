@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::config::SecurityConfig;
-use clap::Args;
+use clap::{Args, ValueEnum};
 
 #[derive(Args, Debug, Clone)]
 pub struct SecurityConfigArgs {
@@ -25,4 +25,10 @@ pub fn get_security_config_from_cli(args: &SecurityConfigArgs) -> anyhow::Result
         args.ca_cert.as_path(),
         &args.shared_secret,
     )
+}
+
+#[derive(ValueEnum, Clone, Debug)]
+pub enum TransportType {
+    Tcp,
+    Kcp,
 }

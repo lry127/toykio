@@ -88,10 +88,6 @@ struct H2StreamEndpoint {
     recv_from_client: RecvStream,
 }
 
-struct H2StreamReader {
-    send_stream: SendStream<Bytes>,
-}
-
 impl DataReader for RecvStream {
     async fn read_data(&mut self) -> Result<Option<Bytes>, DataEndpointError> {
         let res = match poll_fn(|cx| self.poll_data(cx)).await {
@@ -129,7 +125,7 @@ impl DataWriter for SendStream<Bytes> {
                         "HTTP/2 stream closed",
                     ))
                 })?
-                .map_err(|e| DataEndpointError::from(e))?; // Handle the inner Result error
+                .map_err(DataEndpointError::from)?; // Handle the inner Result error
 
             // 3. Determine how much data we are allowed to send right now.
             let chunk_size = std::cmp::min(data.len(), available_capacity);
@@ -139,7 +135,7 @@ impl DataWriter for SendStream<Bytes> {
 
             // 5. Immediately consume the assigned capacity by sending the chunk.
             self.send_data(chunk, false)
-                .map_err(|e| DataEndpointError::from(e))?;
+                .map_err(DataEndpointError::from)?;
         }
 
         Ok(())
@@ -147,7 +143,7 @@ impl DataWriter for SendStream<Bytes> {
 
     async fn shutdown(&mut self) -> Result<(), DataEndpointError> {
         self.send_data(Bytes::new(), true)
-            .map_err(|e| DataEndpointError::from(e))?;
+            .map_err(DataEndpointError::from)?;
         Ok(())
     }
 }
@@ -215,8 +211,8 @@ impl H2StreamHandler {
     }
 }
 
-struct ServerConnectionHandler {
-    auth_secret: HashedAuthSecret,
+pub(super) struct ServerConnectionHandler {
+    pub(super) auth_secret: HashedAuthSecret,
 }
 
 const PROTOCOL_MAGIC: [u8; 16] = [

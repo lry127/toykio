@@ -2,7 +2,7 @@ use anyhow::bail;
 use clap::Parser;
 use std::net::SocketAddr;
 use std::str::FromStr;
-use toykio::cli::{SecurityConfigArgs, get_security_config_from_cli};
+use toykio::cli::{SecurityConfigArgs, TransportType, get_security_config_from_cli};
 use toykio::server::ProxyServer;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
@@ -10,8 +10,10 @@ use tracing_subscriber::{EnvFilter, FmtSubscriber};
 struct ServerCli {
     #[command(flatten)]
     security_config_args: SecurityConfigArgs,
-    #[arg(long)]
+    #[arg(long, short)]
     listen_addr: String,
+    #[arg(long, short)]
+    transport: TransportType,
 }
 
 #[tokio::main]
@@ -36,9 +38,8 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::subscriber::set_global_default(subscriber)?;
 
-    tracing::debug!("started");
+    tracing::debug!("server started");
 
-    let mut proxy_server = ProxyServer::bind(&cli.listen_addr, server_security_config).await?;
-    let _ = proxy_server.server_loop().await;
+    ProxyServer::run_server_loop(&cli.listen_addr, cli.transport, server_security_config).await?;
     Ok(())
 }
