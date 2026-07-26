@@ -1,15 +1,12 @@
-use anyhow::bail;
 use bytes::BytesMut;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 pub mod config;
-pub mod net;
-pub mod protocol;
+pub(crate) mod net;
 
-pub mod tls;
+pub(crate) mod tls;
 
 pub mod server;
-pub(crate) mod socks5;
 
 pub mod client;
 
@@ -20,14 +17,17 @@ pub(crate) mod test_helpers;
 
 #[allow(async_fn_in_trait)]
 pub trait ReadBufNExt {
-    async fn read_buf_n(&mut self, buf: &mut BytesMut, n: usize) -> anyhow::Result<()>;
+    async fn read_buf_n(&mut self, buf: &mut BytesMut, n: usize) -> tokio::io::Result<()>;
 }
 
 impl<T: AsyncRead + Unpin> ReadBufNExt for T {
-    async fn read_buf_n(&mut self, buf: &mut BytesMut, n: usize) -> anyhow::Result<()> {
+    async fn read_buf_n(&mut self, buf: &mut BytesMut, n: usize) -> tokio::io::Result<()> {
         while buf.len() < n {
             if self.read_buf(buf).await? == 0 {
-                bail!("eof while trying to read {n} bytes");
+                return Err(tokio::io::Error::new(
+                    tokio::io::ErrorKind::UnexpectedEof,
+                    format!("eof while trying to read {n} bytes"),
+                ));
             }
         }
         Ok(())
