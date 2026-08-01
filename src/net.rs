@@ -1,8 +1,12 @@
 use kcp_tokio::{KcpConfig, KcpListener, KcpStream, UdpTransport};
+use rustls::ClientConfig;
+use rustls::pki_types::ServerName;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
+use tokio::net::{TcpListener, TcpStream, ToSocketAddrs, lookup_host};
+use tokio_rustls::TlsConnector;
+use tokio_rustls::client::TlsStream;
 use tracing::warn;
 
 pub trait ReadStream: AsyncRead + Send + Unpin {}
@@ -23,6 +27,7 @@ pub trait StreamAcceptor {
     fn accept_stream(
         &mut self,
     ) -> impl Future<Output = tokio::io::Result<(Self::Stream, SocketAddr)>> + Send + '_;
+    #[cfg(test)]
     fn get_local_addr(&self) -> Option<SocketAddr>;
 }
 
@@ -38,6 +43,7 @@ impl StreamAcceptor for TcpStreamAcceptor {
         Ok((stream, addr))
     }
 
+    #[cfg(test)]
     fn get_local_addr(&self) -> Option<SocketAddr> {
         self.tcp_listener.local_addr().ok()
     }
@@ -63,6 +69,7 @@ impl StreamAcceptor for KcpStreamAcceptor {
             .map_err(tokio::io::Error::other)
     }
 
+    #[cfg(test)]
     fn get_local_addr(&self) -> Option<SocketAddr> {
         Some(*self.kcp_listener.local_addr())
     }
@@ -75,6 +82,86 @@ impl KcpStreamAcceptor {
             .await
             .map_err(tokio::io::Error::other)?;
         Ok(Self { kcp_listener })
+    }
+}
+
+pub trait StreamConnector {
+    type StreamType: StreamConnection;
+    fn connect_to<T: ToSocketAddrs + Send + 'static>(
+        &self,
+        remote: T,
+    ) -> impl Future<Output = tokio::io::Result<Self::StreamType>> + Send + '_;
+}
+
+pub struct TcpConnector;
+
+impl StreamConnector for TcpConnector {
+    type StreamType = TcpStream;
+
+    async fn connect_to<T: ToSocketAddrs>(&self, remote: T) -> tokio::io::Result<Self::StreamType> {
+        TcpStream::connect(remote).await
+    }
+}
+
+pub struct KcpConnector {
+    kcp_config: KcpConfig,
+}
+
+impl StreamConnector for KcpConnector {
+    type StreamType = KcpStream;
+
+    async fn connect_to<T: ToSocketAddrs>(&self, remote: T) -> std::io::Result<Self::StreamType> {
+        let config = self.kcp_config.clone();
+        let resolved: Vec<_> = lookup_host(remote).await?.collect();
+
+        let remote_resolved = resolved
+            .iter()
+            .find(|s| s.is_ipv4())
+            .copied()
+            .or_else(|| resolved.first().copied())
+            .ok_or_else(|| tokio::io::Error::other("can't resolve target host"))?;
+
+        Ok(KcpStream::connect(remote_resolved, config)
+            .await
+            .map_err(tokio::io::Error::other)?)
+    }
+}
+
+struct TlsStreamConnector<Inner: StreamConnector> {
+    tls_connector: TlsConnector,
+    server_name: ServerName<'static>,
+    inner_connector: Inner,
+}
+
+impl<Inner: StreamConnector> TlsStreamConnector<Inner> {
+    pub fn new(
+        client_config: ClientConfig,
+        server_host: &str,
+        inner_connector: Inner,
+    ) -> anyhow::Result<Self> {
+        let server_name = ServerName::try_from(server_host)?.to_owned();
+        let tls_connector = TlsConnector::from(Arc::new(client_config));
+        Ok(Self {
+            tls_connector,
+            server_name,
+            inner_connector,
+        })
+    }
+}
+
+impl<Inner: StreamConnector + Sync> StreamConnector for TlsStreamConnector<Inner> {
+    type StreamType = TlsStream<Inner::StreamType>;
+
+    async fn connect_to<T: ToSocketAddrs + Send + 'static>(
+        &self,
+        remote: T,
+    ) -> std::io::Result<Self::StreamType> {
+        let raw_connection = self.inner_connector.connect_to(remote).await?;
+        let tls_stream = self
+            .tls_connector
+            .connect(self.server_name.clone(), raw_connection)
+            .await?;
+        Ok(tls_stream)
     }
 }
 

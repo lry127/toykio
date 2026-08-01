@@ -14,6 +14,8 @@ use tracing::{debug, instrument};
 
 pub(super) mod socks5;
 
+pub(super) mod c2s_connections;
+
 pub struct Socks5Processor {
     socks5_connection_manager: ConnectionManager<TcpStreamAcceptor, Socks5Handler>,
     tls_connector: Arc<TlsConnector>,
