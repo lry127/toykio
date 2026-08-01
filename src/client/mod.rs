@@ -203,7 +203,10 @@ impl Socks5Handler {
             ));
             stream.write_all_buf(&mut proxy_write_buf).await.ok();
             stream.shutdown().await.ok();
-            bail!("server actively rejected our request");
+            bail!(
+                "server actively rejected our request: status {}",
+                resp_recv_stream.status()
+            );
         }
 
         proxy_write_buf.put_slice(&construct_connection_server_reply(

@@ -55,6 +55,6 @@ async fn main() -> anyhow::Result<()> {
         client_security_config,
     )
     .await?;
-    client.run_processor(cli.remote_addr).await?;
+    client.run_processor(cli.socks5_addr).await?;
     Ok(())
 }

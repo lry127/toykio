@@ -8,12 +8,11 @@ use bytes::Bytes;
 use h2::server::{Connection, SendResponse};
 use h2::{Reason, RecvStream};
 use http::{Method, Request, Response};
-use log::warn;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 
 struct H2ProxyConnectionsMultiplexer<T> {
     h2_connection: Connection<T, Bytes>,

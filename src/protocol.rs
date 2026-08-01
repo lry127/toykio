@@ -11,7 +11,7 @@ pub(crate) fn build_proxy_steam_establish_req(
     port: u16,
 ) -> anyhow::Result<Request<()>> {
     Request::builder()
-        .method("get")
+        .method("GET")
         .uri("/")
         .header(HEADER_TARGET_KEY, format!("{host}:{port}"))
         .body(())

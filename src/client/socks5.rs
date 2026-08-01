@@ -5,7 +5,7 @@ use std::net::Ipv4Addr;
 use tokio::io;
 
 use crate::client::socks5::VariableHostRepr::{DomainName, Ipv4};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tracing::debug;
 
 #[derive(Debug)]
@@ -126,7 +126,8 @@ pub async fn handle_target_addr_negotiation<T: AsyncRead + AsyncWrite + Unpin>(
     };
 
     debug!("target host: (raw): {target_hostname:?}");
-    let target_port = stream.read_u16().await?;
+    stream.read_buf_n(read_buf, 2).await?;
+    let target_port = read_buf.get_u16();
     debug!("target port: {target_port}");
 
     // if we accept the connection, wait for remote (actual) proxy server to establish tcp connection

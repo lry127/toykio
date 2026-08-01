@@ -13,12 +13,12 @@ Toykio (TOY toKIO) is a toy (but functional) network proxy written to get my han
 
 1. server (listening on 0.0.0.0:1234, where actual outbound connections to target happen)
     ```shell
-      cargo run --bin run_server -- --cert-path ./certs/server/server.crt --cert-key ./certs/server/server.key --ca-cert ./certs/ca/ca.crt  --listen-addr 127.0.0.1:1234 --shared-secret my_secret
+      cargo run --bin run_server -- --cert-path ./certs/server/server.crt --cert-key ./certs/server/server.key --ca-cert ./certs/ca/ca.crt  --listen-addr 127.0.0.1:1234 --shared-secret my_secret --transport tcp
     ```
 
 2. client (socks5 listening on 127.0.0.1:1080, relaying proxy request to server (default 127.0.0.1:1234), server and client can reside on different machines)
     ```shell
-    cargo run --bin run_client -- --cert-path ./certs/client/client.crt --cert-key ./certs/client/client.key --ca-cert ./certs/ca/ca.crt --socks5-addr 127.0.0.1:1080 --remote-addr 127.0.0.1:1234 --shared-secret my_secret
+    cargo run --bin run_client -- --cert-path ./certs/client/client.crt --cert-key ./certs/client/client.key --ca-cert ./certs/ca/ca.crt --socks5-addr 127.0.0.1:1080 --remote-addr 127.0.0.1:1234 --shared-secret my_secret --transport tcp
     ```
 
 3. try socks5 (on the same machine where client is running)
