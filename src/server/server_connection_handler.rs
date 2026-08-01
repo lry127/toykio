@@ -1,16 +1,14 @@
 use crate::config::HashedAuthSecret;
+use crate::data_endpoint::H2StreamEndpoint;
 use crate::net::{StreamConnection, StreamHandler};
 use crate::protocol::parse_target_from_req;
-use crate::server::proxy_manager::{
-    DataEndpoint, DataEndpointError, DataReader, DataWriter, ProxyManager,
-};
+use crate::server::proxy_manager::ProxyManager;
 use anyhow::{Context, bail};
 use bytes::Bytes;
 use h2::server::{Connection, SendResponse};
-use h2::{Reason, RecvStream, SendStream};
+use h2::{Reason, RecvStream};
 use http::{Method, Request, Response};
 use log::warn;
-use std::future::poll_fn;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -81,80 +79,6 @@ impl<T: StreamConnection + 'static> H2ProxyConnectionsMultiplexer<T> {
             }
         };
         Ok(())
-    }
-}
-
-struct H2StreamEndpoint {
-    send_to_client: SendStream<Bytes>,
-    recv_from_client: RecvStream,
-}
-
-impl DataReader for RecvStream {
-    async fn read_data(&mut self) -> Result<Option<Bytes>, DataEndpointError> {
-        let res = match poll_fn(|cx| self.poll_data(cx)).await {
-            None => return Ok(None),
-            Some(res) => res,
-        };
-        match res {
-            Ok(data) => {
-                let res = self.flow_control().release_capacity(data.len());
-                match res {
-                    Ok(_) => Ok(Some(data)),
-                    Err(err) => Err(DataEndpointError::IoError(std::io::Error::other(err))),
-                }
-            }
-            Err(err) => Err(DataEndpointError::IoError(std::io::Error::other(err))),
-        }
-    }
-}
-
-impl DataWriter for SendStream<Bytes> {
-    async fn write_data(&mut self, mut data: Bytes) -> Result<(), DataEndpointError> {
-        while !data.is_empty() {
-            // 1. Signal intent to send the exact remaining amount of data.
-            self.reserve_capacity(data.len());
-
-            // 2. Bridge the poll-based API into the async/await world.
-            // poll_fn provides the Context (`cx`) needed by `poll_capacity`.
-            let available_capacity = poll_fn(|cx| self.poll_capacity(cx))
-                .await
-                .ok_or_else(|| {
-                    // poll_capacity returns Option::None if the stream is closed
-                    // and will never receive capacity again.
-                    DataEndpointError::from(std::io::Error::new(
-                        std::io::ErrorKind::ConnectionAborted,
-                        "HTTP/2 stream closed",
-                    ))
-                })?
-                .map_err(DataEndpointError::from)?; // Handle the inner Result error
-
-            // 3. Determine how much data we are allowed to send right now.
-            let chunk_size = std::cmp::min(data.len(), available_capacity);
-
-            // 4. Zero-copy split of the payload.
-            let chunk = data.split_to(chunk_size);
-
-            // 5. Immediately consume the assigned capacity by sending the chunk.
-            self.send_data(chunk, false)
-                .map_err(DataEndpointError::from)?;
-        }
-
-        Ok(())
-    }
-
-    async fn shutdown(&mut self) -> Result<(), DataEndpointError> {
-        self.send_data(Bytes::new(), true)
-            .map_err(DataEndpointError::from)?;
-        Ok(())
-    }
-}
-
-impl DataEndpoint for H2StreamEndpoint {
-    type ReadHalf = RecvStream;
-    type WriteHalf = SendStream<Bytes>;
-
-    fn split(self) -> (Self::ReadHalf, Self::WriteHalf) {
-        (self.recv_from_client, self.send_to_client)
     }
 }
 
@@ -345,6 +269,7 @@ mod tests {
 #[cfg(test)]
 mod h2_proxy_tests {
     use super::*;
+    use crate::data_endpoint::DataReader;
     use bytes::Bytes;
     use h2::client;
     use http::{Method, Request};

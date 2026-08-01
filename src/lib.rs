@@ -8,6 +8,8 @@ pub(crate) mod tls;
 
 pub(crate) mod protocol;
 
+pub(crate) mod data_endpoint;
+
 pub mod server;
 
 pub mod client;
