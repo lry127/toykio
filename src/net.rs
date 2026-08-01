@@ -1,4 +1,3 @@
-use enum_dispatch::enum_dispatch;
 use kcp_tokio::{KcpConfig, KcpListener, KcpStream, UdpTransport};
 use rustls::ClientConfig;
 use rustls::pki_types::ServerName;
@@ -122,9 +121,9 @@ impl StreamConnector for KcpConnector {
             .or_else(|| resolved.first().copied())
             .ok_or_else(|| tokio::io::Error::other("can't resolve target host"))?;
 
-        Ok(KcpStream::connect(remote_resolved, config)
+        KcpStream::connect(remote_resolved, config)
             .await
-            .map_err(tokio::io::Error::other)?)
+            .map_err(tokio::io::Error::other)
     }
 }
 
@@ -205,7 +204,9 @@ where
             };
             let handler = self.handler.clone();
             tokio::spawn(async move {
-                handler.handle_stream(s, addr).await.ok();
+                if let Err(err) = handler.handle_stream(s, addr).await {
+                    warn!("failed to handle stream: {err}");
+                };
             });
         }
     }

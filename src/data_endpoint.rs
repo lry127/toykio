@@ -1,7 +1,6 @@
 use bytes::{Bytes, BytesMut};
 use h2::{RecvStream, SendStream};
 use std::future::poll_fn;
-use std::sync::atomic::AtomicUsize;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -185,7 +184,15 @@ where
     A: DataEndpoint,
     B: DataEndpoint,
 {
-    pub fn spawn_copy_tasks(self, proxy_id: ProxyId, cancellation_token: CancellationToken) {
+    pub fn run_copy_task(self, proxy_id: ProxyId) {
+        self.run_copy_task_with_cancel_token(proxy_id, CancellationToken::new());
+    }
+
+    pub fn run_copy_task_with_cancel_token(
+        self,
+        proxy_id: ProxyId,
+        cancellation_token: CancellationToken,
+    ) {
         let (rx_a, tx_a) = self.endpoint_a.split();
         let (rx_b, tx_b) = self.endpoint_b.split();
 

@@ -53,7 +53,7 @@ impl ProxyServer {
         tls_config: ServerConfig,
         auth_secret: HashedAuthSecret,
     ) {
-        let server_connection_handler = ServerConnectionHandler { auth_secret };
+        let server_connection_handler = ServerConnectionHandler::new(auth_secret);
 
         let tls_wrapped_handler = ServerTlsStreamHandler::new(
             Arc::new(tls_config),

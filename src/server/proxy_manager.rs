@@ -41,7 +41,7 @@ impl ProxyManager {
             endpoint_b,
         };
 
-        copier.spawn_copy_tasks(proxy_id, token);
+        copier.run_copy_task_with_cancel_token(proxy_id, token);
     }
 
     pub fn shutdown_manager(&self) {

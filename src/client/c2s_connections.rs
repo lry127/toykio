@@ -1,5 +1,6 @@
+use crate::config::HashedAuthSecret;
 use crate::net::StreamConnector;
-use crate::protocol::build_proxy_steam_establish_req;
+use crate::protocol::{authenticate_to_server, build_proxy_steam_establish_req};
 use anyhow::{Context, bail};
 use bytes::Bytes;
 use h2::SendStream;
@@ -15,14 +16,16 @@ use tracing::error;
 pub struct H2ToServerMultiplexer<T: StreamConnector> {
     connector: T,
     target: SocketAddr,
+    auth_secret: HashedAuthSecret,
     connections: VecDeque<(JoinHandle<()>, SendRequest<Bytes>)>,
 }
 
 impl<T: StreamConnector + Send + 'static> H2ToServerMultiplexer<T> {
-    pub fn new(connector: T, target: SocketAddr) -> Self {
+    pub fn new(connector: T, target: SocketAddr, auth_secret: HashedAuthSecret) -> Self {
         Self {
             connector,
             target,
+            auth_secret,
             connections: VecDeque::new(),
         }
     }
@@ -103,8 +106,8 @@ impl<T: StreamConnector + Send + 'static> H2ToServerMultiplexer<T> {
     }
 
     async fn establish_new_connection(&mut self) -> anyhow::Result<()> {
-        let raw_conn = self.connector.connect_to(self.target.clone()).await?;
-
+        let mut raw_conn = self.connector.connect_to(self.target).await?;
+        authenticate_to_server(&self.auth_secret, &mut raw_conn).await?;
         let (send_req, h2_conn) = h2::client::handshake(raw_conn).await?;
         let job_handle = tokio::spawn(async move {
             let res = h2_conn.await;
@@ -123,8 +126,8 @@ struct CreateNewProxySteamMsg {
 
 impl CreateNewProxySteamMsg {
     pub fn new_request(
-        target_port: u16,
         target_addr: String,
+        target_port: u16,
     ) -> (Self, oneshot::Receiver<anyhow::Result<ClientH2ProxyStream>>) {
         let (tx, rx) = oneshot::channel();
         (
@@ -142,7 +145,26 @@ pub struct H2MultiplexerHandle {
     sender: Sender<CreateNewProxySteamMsg>,
 }
 
+impl H2MultiplexerHandle {
+    pub async fn create_new_proxy_stream(
+        &self,
+        host: String,
+        port: u16,
+    ) -> anyhow::Result<ClientH2ProxyStream> {
+        let (msg, receiver) = CreateNewProxySteamMsg::new_request(host, port);
+        if self.sender.send(msg).await.is_err() {
+            bail!("failed to send msg to multiplexer");
+        }
+        match receiver.await {
+            Ok(msg) => msg,
+            Err(err) => {
+                bail!("failed to recv msg from multiplexer {err}")
+            }
+        }
+    }
+}
+
 pub struct ClientH2ProxyStream {
-    resp_fut: ResponseFuture,
-    send_stream: SendStream<Bytes>,
+    pub resp_fut: ResponseFuture,
+    pub send_stream: SendStream<Bytes>,
 }

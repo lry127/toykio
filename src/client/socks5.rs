@@ -1,12 +1,11 @@
 use crate::ReadBufNExt;
-use anyhow::{Context, bail};
+use anyhow::bail;
 use bytes::{Buf, BufMut, BytesMut};
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::Ipv4Addr;
 use tokio::io;
 
 use crate::client::socks5::VariableHostRepr::{DomainName, Ipv4};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::lookup_host;
 use tracing::debug;
 
 #[derive(Debug)]
@@ -18,32 +17,14 @@ pub enum VariableHostRepr {
 impl VariableHostRepr {
     const TYPE_IPV4: u8 = 0x1;
     const TYPE_DOMAIN: u8 = 0x3;
+    #[cfg(test)]
     pub fn new_ip(ip: u32) -> Self {
         Ipv4(ip)
     }
 
+    #[cfg(test)]
     pub fn new_domain(domain_name: String) -> Self {
         DomainName(domain_name)
-    }
-
-    fn get_type_repr(&self) -> u8 {
-        match self {
-            Ipv4(_) => 0x1,
-            DomainName(_) => 0x3,
-        }
-    }
-
-    pub fn serialize_to_buf(&self, buf: &mut BytesMut) {
-        buf.put_u8(self.get_type_repr());
-        match self {
-            Ipv4(ip) => {
-                buf.put_u32(*ip);
-            }
-            DomainName(addr) => {
-                buf.put_u8(addr.len() as u8);
-                buf.put(addr.as_bytes());
-            }
-        }
     }
 
     pub async fn read_from_stream<T: AsyncRead + Unpin>(
@@ -73,16 +54,10 @@ impl VariableHostRepr {
         }
     }
 
-    pub async fn resolve(&self, port: u16) -> anyhow::Result<SocketAddr> {
+    pub fn to_str_repr(&self) -> String {
         match self {
-            Ipv4(ip) => {
-                let socket_addr = SocketAddrV4::new(Ipv4Addr::from(*ip), port);
-                Ok(SocketAddr::V4(socket_addr))
-            }
-            DomainName(domain) => lookup_host(format!("{domain}:{port}"))
-                .await?
-                .next()
-                .context("can't resolve"),
+            Ipv4(raw_v4) => Ipv4Addr::from(*raw_v4).to_string(),
+            DomainName(dn) => dn.to_owned(),
         }
     }
 }
@@ -193,6 +168,15 @@ mod tests {
     use super::*;
     use bytes::BytesMut;
     use tokio_test::io::Builder;
+
+    #[test]
+    fn test_variable_host_repr_to_str() {
+        let v4 = VariableHostRepr::new_ip(Ipv4Addr::new(127, 0, 0, 1).to_bits());
+        assert_eq!(v4.to_str_repr(), "127.0.0.1");
+
+        let dm = VariableHostRepr::new_domain("example.com".to_string());
+        assert_eq!(dm.to_str_repr(), "example.com");
+    }
 
     #[tokio::test]
     async fn test_variable_host_repr_ipv4() {
