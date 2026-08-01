@@ -1,15 +1,21 @@
+use crate::cli::TransportType;
+use crate::cli::TransportType::Kcp;
+use crate::client::c2s_connections::{H2MultiplexerHandle, H2ToServerMultiplexer};
 use crate::client::socks5::{consume_client_hello, handle_target_addr_negotiation};
 use crate::config::{HashedAuthSecret, SecurityConfig};
-use crate::net::{ConnectionManager, StreamConnection, StreamHandler, TcpStreamAcceptor};
+use crate::net::{
+    ConnectionManager, KcpConnector, StreamConnection, StreamConnector, StreamHandler,
+    TcpConnector, TcpStreamAcceptor, TlsStreamConnector,
+};
 use crate::tls::build_client_tls_config;
 use anyhow::{Context, bail};
 use bytes::BytesMut;
+use kcp_tokio::KcpConfig;
+use rustls::ClientConfig;
 use rustls::pki_types::ServerName;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::net::ToSocketAddrs;
-use tokio_rustls::TlsConnector;
 use tracing::{debug, instrument};
 
 pub(super) mod socks5;
@@ -17,30 +23,26 @@ pub(super) mod socks5;
 pub(super) mod c2s_connections;
 
 pub struct Socks5Processor {
-    socks5_connection_manager: ConnectionManager<TcpStreamAcceptor, Socks5Handler>,
-    tls_connector: Arc<TlsConnector>,
-    auth_secret: Arc<HashedAuthSecret>,
-    server_addr: Arc<SocketAddr>,
+    client_config: ClientConfig,
+    auth_secret: HashedAuthSecret,
+    server_addr: SocketAddr,
     server_hostname: ServerName<'static>,
+    transport_type: TransportType,
 }
 
 impl Socks5Processor {
-    pub async fn new<T: ToSocketAddrs>(
-        addr: T,
-        security_config: SecurityConfig,
+    pub async fn new(
         server_host: &str,
         server_port: u16,
+        transport_type: TransportType,
+        security_config: SecurityConfig,
     ) -> anyhow::Result<Self> {
-        let tcp_listener = TcpStreamAcceptor::bind(addr).await?;
-        let socks5_client_handler = Socks5Handler {};
-        let socks5_connection_manager = ConnectionManager::new(tcp_listener, socks5_client_handler);
-
         let server_addr = tokio::net::lookup_host((server_host, server_port))
             .await?
             .next()
             .context("can't resolve server addr")?;
 
-        let tls_config = build_client_tls_config(
+        let client_config = build_client_tls_config(
             security_config.self_cert_bundle.certificate,
             security_config.self_cert_bundle.certificate_priv_key,
             security_config.ca_cert,
@@ -48,23 +50,56 @@ impl Socks5Processor {
 
         let servername = ServerName::try_from(server_host)?.to_owned();
 
-        let tls_connector = TlsConnector::from(Arc::new(tls_config));
-
         Ok(Self {
-            socks5_connection_manager,
-            auth_secret: Arc::new(security_config.auth_secret),
-            tls_connector: Arc::new(tls_connector),
-            server_addr: Arc::new(server_addr),
+            auth_secret: security_config.auth_secret,
+            client_config,
+            server_addr,
             server_hostname: servername,
+            transport_type,
         })
     }
+    pub async fn run_processor<T: ToSocketAddrs>(self, bind_addr: T) -> anyhow::Result<()> {
+        match self.transport_type {
+            TransportType::Tcp => self.run_with_raw_connector(bind_addr, TcpConnector).await,
+            Kcp => {
+                self.run_with_raw_connector(
+                    bind_addr,
+                    KcpConnector {
+                        kcp_config: KcpConfig::file_transfer(),
+                    },
+                )
+                .await
+            }
+        }
+    }
 
-    pub async fn run_socks5_loop(self) {
-        self.socks5_connection_manager.run_accept_loop().await;
+    async fn run_with_raw_connector<
+        T: ToSocketAddrs,
+        U: StreamConnector + Send + Sync + 'static,
+    >(
+        self,
+        bind_addr: T,
+        connector: U,
+    ) -> anyhow::Result<()> {
+        let tls_connector =
+            TlsStreamConnector::new(self.client_config, self.server_hostname, connector);
+        let h2_multiplexer = H2ToServerMultiplexer::new(tls_connector, self.server_addr);
+        let multiplexer_handler = h2_multiplexer.run_multiplexer_loop();
+
+        let socks5_listener = TcpStreamAcceptor::bind(bind_addr).await?;
+        let socks5_client_handler = Socks5Handler {
+            h2_multiplexer: multiplexer_handler,
+        };
+        let socks5_connection_manager =
+            ConnectionManager::new(socks5_listener, socks5_client_handler);
+        socks5_connection_manager.run_accept_loop().await;
+        Ok(())
     }
 }
 
-struct Socks5Handler;
+struct Socks5Handler {
+    h2_multiplexer: H2MultiplexerHandle,
+}
 
 impl StreamHandler for Socks5Handler {
     #[instrument(skip(self, stream))]

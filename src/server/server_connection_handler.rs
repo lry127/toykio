@@ -1,5 +1,6 @@
 use crate::config::HashedAuthSecret;
 use crate::net::{StreamConnection, StreamHandler};
+use crate::protocol::parse_target_from_req;
 use crate::server::proxy_manager::{
     DataEndpoint, DataEndpointError, DataReader, DataWriter, ProxyManager,
 };
@@ -169,18 +170,12 @@ impl H2StreamHandler {
             bail!("invalid req method");
         }
 
-        let target = match self.req.headers().get("target") {
-            None => {
+        let target = match parse_target_from_req(&self.req) {
+            Ok(target) => target,
+            Err(err) => {
                 self.send_error_resp(400).await.ok();
-                bail!("no target found");
+                bail!(err);
             }
-            Some(target) => match target.to_str() {
-                Ok(s) if s.contains(':') => s.to_owned(),
-                _ => {
-                    self.send_error_resp(400).await.ok();
-                    bail!("invalid target, ':' separated target hostname expected");
-                }
-            },
         };
 
         let target_endpoint = match proxy_manager.tcp_connect_to_target(target).await {
@@ -589,10 +584,7 @@ mod h2_proxy_tests {
 
         let res = handler.run_proxy(proxy_manager).await;
         assert!(res.is_err());
-        assert_eq!(
-            res.unwrap_err().to_string(),
-            "invalid target, ':' separated target hostname expected"
-        );
+        assert_eq!(res.unwrap_err().to_string(), "invalid target");
 
         let response = response_future.await.unwrap();
         assert_eq!(response.status(), 400);

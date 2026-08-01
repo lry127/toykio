@@ -1,3 +1,4 @@
+use enum_dispatch::enum_dispatch;
 use kcp_tokio::{KcpConfig, KcpListener, KcpStream, UdpTransport};
 use rustls::ClientConfig;
 use rustls::pki_types::ServerName;
@@ -104,7 +105,7 @@ impl StreamConnector for TcpConnector {
 }
 
 pub struct KcpConnector {
-    kcp_config: KcpConfig,
+    pub kcp_config: KcpConfig,
 }
 
 impl StreamConnector for KcpConnector {
@@ -127,7 +128,7 @@ impl StreamConnector for KcpConnector {
     }
 }
 
-struct TlsStreamConnector<Inner: StreamConnector> {
+pub struct TlsStreamConnector<Inner: StreamConnector> {
     tls_connector: TlsConnector,
     server_name: ServerName<'static>,
     inner_connector: Inner,
@@ -136,16 +137,15 @@ struct TlsStreamConnector<Inner: StreamConnector> {
 impl<Inner: StreamConnector> TlsStreamConnector<Inner> {
     pub fn new(
         client_config: ClientConfig,
-        server_host: &str,
+        server_name: ServerName<'static>,
         inner_connector: Inner,
-    ) -> anyhow::Result<Self> {
-        let server_name = ServerName::try_from(server_host)?.to_owned();
+    ) -> Self {
         let tls_connector = TlsConnector::from(Arc::new(client_config));
-        Ok(Self {
+        Self {
             tls_connector,
             server_name,
             inner_connector,
-        })
+        }
     }
 }
 

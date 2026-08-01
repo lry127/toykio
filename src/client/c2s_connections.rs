@@ -1,26 +1,25 @@
-use crate::net::{StreamConnection, StreamConnector};
+use crate::net::StreamConnector;
+use crate::protocol::build_proxy_steam_establish_req;
 use anyhow::{Context, bail};
 use bytes::Bytes;
-use h2::client::{Connection, SendRequest};
-use http::Request;
+use h2::SendStream;
+use h2::client::{ResponseFuture, SendRequest};
 use log::warn;
-use std::collections::{HashMap, HashSet, VecDeque};
-use tokio::net::ToSocketAddrs;
+use std::collections::VecDeque;
+use std::net::SocketAddr;
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
-use tokio_util::sync::CancellationToken;
 use tracing::error;
 
-pub struct H2ToServerMultiplexer<T: StreamConnector, U> {
+pub struct H2ToServerMultiplexer<T: StreamConnector> {
     connector: T,
-    target: U,
+    target: SocketAddr,
     connections: VecDeque<(JoinHandle<()>, SendRequest<Bytes>)>,
 }
 
-impl<T: StreamConnector + Send + 'static, U: ToSocketAddrs + Send + 'static + Sync + Clone>
-    H2ToServerMultiplexer<T, U>
-{
-    pub async fn new(connector: T, target: U) -> Self {
+impl<T: StreamConnector + Send + 'static> H2ToServerMultiplexer<T> {
+    pub fn new(connector: T, target: SocketAddr) -> Self {
         Self {
             connector,
             target,
@@ -28,19 +27,19 @@ impl<T: StreamConnector + Send + 'static, U: ToSocketAddrs + Send + 'static + Sy
         }
     }
 
-    pub async fn run_multiplexer_loop(self) -> ToServerConnectionHandle {
+    pub fn run_multiplexer_loop(self) -> H2MultiplexerHandle {
         let (tx, rx) = tokio::sync::mpsc::channel(16);
         tokio::spawn(async move {
             let res = self.run_multiplexer_inner(rx).await;
             error!("multiplexer unexpected returned: {res:?}");
         });
 
-        ToServerConnectionHandle { sender: tx }
+        H2MultiplexerHandle { sender: tx }
     }
 
     async fn run_multiplexer_inner(
         mut self,
-        mut receiver: Receiver<ToConnectionMsg>,
+        mut receiver: Receiver<CreateNewProxySteamMsg>,
     ) -> anyhow::Result<()> {
         loop {
             match receiver.recv().await {
@@ -56,13 +55,33 @@ impl<T: StreamConnector + Send + 'static, U: ToSocketAddrs + Send + 'static + Sy
         }
     }
 
-    async fn process_msg(&mut self, msg: ToConnectionMsg) -> anyhow::Result<()> {
-        let conn = self.pick_connection().await?;
-        let req = Request::builder().method("get").uri("/hello").body(())?;
+    async fn process_msg(&mut self, msg: CreateNewProxySteamMsg) -> anyhow::Result<()> {
+        let try_establish_result = async {
+            let conn = self.pick_connection().await?;
+            let req = build_proxy_steam_establish_req(&msg.target_addr, msg.target_port)?;
+            let (resp_fut, send_stream) = conn.send_request(req, false)?;
+            let client_stream = ClientH2ProxyStream {
+                resp_fut,
+                send_stream,
+            };
+            anyhow::Ok(client_stream)
+        }
+        .await;
 
-        let (resp_fut, mut send_stream) = conn.send_request(req, false)?;
-        send_stream.send_data(Bytes::new(), true)?;
-        Ok(())
+        match try_establish_result {
+            Ok(stream) => {
+                if msg.sender.send(Ok(stream)).is_err() {
+                    bail!("failed to send resp");
+                } else {
+                    Ok(())
+                }
+            }
+            Err(err) => {
+                let err_msg = err.to_string();
+                let _ = msg.sender.send(Err(err));
+                bail!(err_msg);
+            }
+        }
     }
 
     async fn pick_connection(&mut self) -> anyhow::Result<&mut SendRequest<Bytes>> {
@@ -85,6 +104,7 @@ impl<T: StreamConnector + Send + 'static, U: ToSocketAddrs + Send + 'static + Sy
 
     async fn establish_new_connection(&mut self) -> anyhow::Result<()> {
         let raw_conn = self.connector.connect_to(self.target.clone()).await?;
+
         let (send_req, h2_conn) = h2::client::handshake(raw_conn).await?;
         let job_handle = tokio::spawn(async move {
             let res = h2_conn.await;
@@ -95,24 +115,34 @@ impl<T: StreamConnector + Send + 'static, U: ToSocketAddrs + Send + 'static + Sy
     }
 }
 
-struct H2ToServerConnection<S: StreamConnection> {
-    conn: Connection<S>,
-}
-
-impl<S: StreamConnection + 'static> H2ToServerConnection<S> {
-    async fn handshake(raw_conn: S) -> anyhow::Result<(Self, SendRequest<Bytes>)> {
-        let (send_req, h2_conn) = h2::client::handshake(raw_conn).await?;
-        let wrapped_conn = Self { conn: h2_conn };
-        Ok((wrapped_conn, send_req))
-    }
-    fn poll_h2_connection(self) {}
-}
-
-struct ToConnectionMsg {
+struct CreateNewProxySteamMsg {
     target_addr: String,
     target_port: u16,
+    sender: oneshot::Sender<anyhow::Result<ClientH2ProxyStream>>,
 }
 
-pub struct ToServerConnectionHandle {
-    sender: Sender<ToConnectionMsg>,
+impl CreateNewProxySteamMsg {
+    pub fn new_request(
+        target_port: u16,
+        target_addr: String,
+    ) -> (Self, oneshot::Receiver<anyhow::Result<ClientH2ProxyStream>>) {
+        let (tx, rx) = oneshot::channel();
+        (
+            Self {
+                target_addr,
+                target_port,
+                sender: tx,
+            },
+            rx,
+        )
+    }
+}
+
+pub struct H2MultiplexerHandle {
+    sender: Sender<CreateNewProxySteamMsg>,
+}
+
+pub struct ClientH2ProxyStream {
+    resp_fut: ResponseFuture,
+    send_stream: SendStream<Bytes>,
 }

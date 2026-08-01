@@ -6,6 +6,8 @@ pub(crate) mod net;
 
 pub(crate) mod tls;
 
+pub(crate) mod protocol;
+
 pub mod server;
 
 pub mod client;
